@@ -1,4 +1,4 @@
-import { createActor } from 'xstate';
+import { AnyMachineSnapshot, createActor } from 'xstate';
 import bodyParser from 'body-parser';
 
 function generateActorId() {
@@ -24,7 +24,7 @@ app.post('/workflows', (req, res) => {
   const actor = createActor(machine).start();
 
   // @ts-ignore
-  persistedStates[workflowId] = actor.getPersistedState();
+  persistedStates[workflowId] = actor.getPersistedSnapshot();
 
   res.send({ workflowId });
 });
@@ -44,12 +44,13 @@ app.post('/workflows/:workflowId', (req, res) => {
   }
 
   const event = req.body;
-  const actor = createActor(machine, { state: snapshot }).start();
-
+  const actor = createActor(machine, {
+    snapshot: snapshot as AnyMachineSnapshot
+  }).start();
   actor.send(event);
 
   // @ts-ignore
-  persistedStates[workflowId] = actor.getPersistedState();
+  persistedStates[workflowId] = actor.getPersistedSnapshot();
 
   actor.stop();
 
@@ -79,7 +80,7 @@ app.get('/', (_, res) => {
         <p>Start a new workflow instance:</p>
         <pre>curl -X POST http://localhost:4242/workflows</pre>
         <p>Send an event to a workflow instance:</p>
-        <pre>curl -X POST http://localhost:4242/workflows/:workflowId -d '{"type":"TIMER"}'</pre>
+        <pre>curl -X POST http://localhost:4242/workflows/:workflowId -d '{"type":"TIMER"}' -H "Content-Type: application/json" </pre>
         <p>Get the current state of a workflow instance:</p>
         <pre>curl -X GET http://localhost:4242/workflows/:workflowId</pre>
       </body>

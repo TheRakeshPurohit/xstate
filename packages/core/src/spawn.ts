@@ -1,118 +1,95 @@
-import { createErrorActorEvent } from './eventUtils.ts';
-import { ProcessingStatus, createActor } from './interpreter.ts';
+import { ProcessingStatus, createActor } from './createActor.ts';
 import {
-  ActorRefFrom,
-  AnyActorScope,
+  ActorFromLogic,
   AnyActorLogic,
   AnyActorRef,
+  AnyActorScope,
   AnyEventObject,
   AnyMachineSnapshot,
+  ConditionalRequired,
   InputFrom,
-  IsLiteralString,
-  ProvidedActor,
-  Snapshot,
-  TODO,
-  RequiredActorOptions,
   IsNotNever,
-  ConditionalRequired
+  RegistryKeyForLogic,
+  SystemRegistry,
+  TODO,
+  type RequiredLogicInput
 } from './types.ts';
 import { resolveReferencedActor } from './utils.ts';
 
-type SpawnOptions<
-  TActor extends ProvidedActor,
-  TSrc extends TActor['src']
-> = TActor extends {
-  src: TSrc;
-}
-  ? ConditionalRequired<
-      [
-        options?: {
-          id?: TActor['id'];
-          systemId?: string;
-          input?: InputFrom<TActor['logic']>;
-          syncSnapshot?: boolean;
-        } & { [K in RequiredActorOptions<TActor>]: unknown }
-      ],
-      IsNotNever<RequiredActorOptions<TActor>>
-    >
-  : never;
-
-export type Spawner<TActor extends ProvidedActor> = IsLiteralString<
-  TActor['src']
-> extends true
-  ? <TSrc extends TActor['src']>(
-      logic: TSrc,
-      ...[options = {} as any]: SpawnOptions<TActor, TSrc>
-    ) => ActorRefFrom<(TActor & { src: TSrc })['logic']>
-  : // TODO: do not accept machines without all implementations
-    <TLogic extends AnyActorLogic | string>(
-      src: TLogic,
+export type Spawner<TSystemRegistry extends SystemRegistry = SystemRegistry> = <
+  TLogic extends AnyActorLogic
+>(
+  src: TLogic,
+  ...[options]: ConditionalRequired<
+    [
       options?: {
         id?: string;
-        systemId?: string;
-        input?: unknown;
+        registryKey?: RegistryKeyForLogic<TLogic, TSystemRegistry>;
+        input?: TLogic extends string ? unknown : InputFrom<TLogic>;
         syncSnapshot?: boolean;
-      }
-    ) => TLogic extends string ? AnyActorRef : ActorRefFrom<TLogic>;
+      } & { [K in RequiredLogicInput<TLogic>]: unknown }
+    ],
+    IsNotNever<RequiredLogicInput<TLogic>>
+  >
+) => ActorFromLogic<TLogic>;
 
 export function createSpawner(
   actorScope: AnyActorScope,
   { machine, context }: AnyMachineSnapshot,
   event: AnyEventObject,
   spawnedChildren: Record<string, AnyActorRef>
-): Spawner<any> {
-  const spawn: Spawner<any> = (src, options = {}) => {
-    const { systemId, input } = options;
+): Spawner {
+  const spawn: Spawner = ((src, options) => {
     if (typeof src === 'string') {
       const logic = resolveReferencedActor(machine, src);
 
       if (!logic) {
         throw new Error(
-          `Actor logic '${src}' not implemented in machine '${machine.id}'`
+          `Actor logic '${src as string}' not implemented in machine '${machine.id}'`
         );
       }
 
-      const actorRef = createActor(logic, {
-        id: options.id,
+      const actor = createActor(logic, {
+        id: options?.id,
         parent: actorScope.self,
-        syncSnapshot: options.syncSnapshot,
+        syncSnapshot: options?.syncSnapshot,
         input:
-          typeof input === 'function'
-            ? input({
+          typeof options?.input === 'function'
+            ? options.input({
                 context,
                 event,
                 self: actorScope.self
               })
-            : input,
+            : options?.input,
         src,
-        systemId
+        registryKey: options?.registryKey
       }) as any;
 
-      spawnedChildren[actorRef.id] = actorRef;
+      spawnedChildren[actor.id] = actor;
 
-      return actorRef;
+      return actor;
     } else {
-      const actorRef = createActor(src, {
-        id: options.id,
+      const actor = createActor(src, {
+        id: options?.id,
         parent: actorScope.self,
-        syncSnapshot: options.syncSnapshot,
-        input: options.input,
+        syncSnapshot: options?.syncSnapshot,
+        input: options?.input,
         src,
-        systemId
+        registryKey: options?.registryKey
       });
 
-      return actorRef;
+      return actor;
     }
-  };
-  return (src, options) => {
-    const actorRef = spawn(src, options) as TODO; // TODO: fix types
-    spawnedChildren[actorRef.id] = actorRef;
+  }) as Spawner;
+  return ((src, options) => {
+    const actor = spawn(src, options) as TODO; // TODO: fix types
+    spawnedChildren[actor.id] = actor;
     actorScope.defer(() => {
-      if (actorRef._processingStatus === ProcessingStatus.Stopped) {
+      if (actor._processingStatus === ProcessingStatus.Stopped) {
         return;
       }
-      actorRef.start();
+      actor.start();
     });
-    return actorRef;
-  };
+    return actor;
+  }) as Spawner;
 }

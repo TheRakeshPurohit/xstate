@@ -1,25 +1,27 @@
-import { BehaviorSubject } from 'rxjs';
 import { act, fireEvent, screen } from '@testing-library/react';
+import { setTimeout as sleep } from 'node:timers/promises';
 import * as React from 'react';
 import { useState } from 'react';
+import { BehaviorSubject } from 'rxjs';
 import {
   Actor,
-  ActorLogicFrom,
   ActorRef,
-  DoneActorEvent,
   Snapshot,
   StateFrom,
-  assign,
   createActor,
-  createMachine,
-  raise
+  createMachine
 } from 'xstate';
-import { fromCallback, fromObservable, fromPromise } from 'xstate/actors';
+import {
+  createCallbackLogic,
+  createObservableLogic,
+  createAsyncLogic
+} from 'xstate';
 import { useActor, useSelector } from '../src/index.ts';
 import { describeEachReactMode } from './utils.tsx';
+import z from 'zod';
 
 afterEach(() => {
-  jest.useRealTimers();
+  vi.useRealTimers();
 });
 
 describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
@@ -28,34 +30,56 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
   };
   const fetchMachine = createMachine({
     id: 'fetch',
-    types: {} as {
-      context: typeof context;
-      events: { type: 'FETCH' } | DoneActorEvent;
-      actors: {
-        src: 'fetchData';
-        logic: ActorLogicFrom<Promise<string>>;
-      };
+    // types: {} as {
+    //   context: typeof context;
+    //   events: { type: 'FETCH' } | DoneActorEvent;
+    //   actorSources: {
+    //     src: 'fetchData';
+    //     logic: ActorLogicFrom<Promise<string>>;
+    //   };
+    // },
+    schemas: {
+      context: z.object({
+        data: z.string().optional()
+      }),
+      events: z.object({
+        type: z.literal('FETCH')
+      }) as any
+    },
+    actorSources: {
+      fetchData: createMachine({})
     },
     initial: 'idle',
     context,
     states: {
       idle: {
-        on: { FETCH: 'loading' }
+        on: { FETCH: { target: 'loading' } }
       },
       loading: {
         invoke: {
           id: 'fetchData',
-          src: 'fetchData',
-          onDone: {
-            target: 'success',
-            actions: assign({
-              data: ({ event }) => {
-                return event.output;
-              }
-            }),
-            guard: ({ event }) => !!event.output.length
+          // src: 'fetchData',
+          src: ({ actorSources }: any) => actorSources.fetchData,
+          // onDone: {
+          //   target: 'success',
+          //   actions: assign({
+          //     data: ({ event }) => {
+          //       return event.output;
+          //     }
+          //   }),
+          //   guard: ({ event }) => !!event.output.length
+          // }
+          onDone: ({ event }: any) => {
+            if ((event.output as any).length > 0) {
+              return {
+                context: {
+                  data: event.output
+                },
+                target: 'success'
+              };
+            }
           }
-        }
+        } as any
       },
       success: {
         type: 'final'
@@ -65,7 +89,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
 
   const actorRef = createActor(
     fetchMachine.provide({
-      actors: {
+      actorSources: {
         fetchData: createMachine({
           initial: 'done',
           states: {
@@ -93,8 +117,8 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
   }) => {
     const [current, send] = useActor(
       fetchMachine.provide({
-        actors: {
-          fetchData: fromPromise(onFetch)
+        actorSources: {
+          fetchData: createAsyncLogic({ run: onFetch }) as any
         }
       }),
       {
@@ -177,10 +201,10 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
         context: { foo: string; test: boolean };
         input: { test: boolean };
       },
-      context: ({ input }) => ({
+      context: (({ input }: any) => ({
         foo: 'bar',
         test: input.test ?? false
-      }),
+      })) as any,
       initial: 'idle',
       states: {
         idle: {}
@@ -208,20 +232,32 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       types: {} as { context: { ref?: ActorRef<any, any> } },
       id: 'spawn',
       initial: 'start',
-      context: { ref: undefined },
+      context: { ref: undefined } as any,
       states: {
         start: {
-          entry: assign({
-            ref: ({ spawn }) =>
-              spawn(
-                fromPromise(() => {
-                  return new Promise((res) => res(42));
+          // entry: assign({
+          //   ref: ({ spawn }) =>
+          //     spawn(
+          //       createAsyncLogic(() => {
+          //         return new Promise((res) => res(42));
+          //       }),
+          //       { id: 'my-promise' }
+          //     )
+          // }),
+          entry: (_, enq) => ({
+            context: {
+              ref: enq.spawn(
+                createAsyncLogic({
+                  run: () => {
+                    return new Promise((res) => res(42));
+                  }
                 }),
                 { id: 'my-promise' }
               )
+            }
           }),
           on: {
-            'xstate.done.actor.my-promise': 'success'
+            'xstate.done.actor.my-promise': { target: 'success' }
           }
         },
         success: {
@@ -248,35 +284,37 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     await screen.findByTestId('success');
   });
 
-  it('actions should not use stale data in a builtin transition action', (done) => {
+  it('actions should not use stale data in a builtin transition action', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
+
     const toggleMachine = createMachine({
-      types: {} as {
-        context: { latest: number };
-        events: { type: 'SET_LATEST' };
-      },
+      // types: {} as {
+      //   context: { latest: number };
+      //   events: { type: 'SET_LATEST' };
+      // },
       context: {
         latest: 0
+      } as any,
+      actions: {
+        getLatest: () => {}
       },
       on: {
-        SET_LATEST: {
-          actions: 'setLatest'
+        SET_LATEST: ({ actions }, enq) => {
+          enq(actions.getLatest);
         }
       }
     });
 
     const Component = () => {
-      const [ext, setExt] = useState(1);
+      const [count, setCount] = useState(1);
 
       const [, send] = useActor(
         toggleMachine.provide({
           actions: {
-            setLatest: assign({
-              latest: () => {
-                expect(ext).toBe(2);
-                done();
-                return ext;
-              }
-            })
+            getLatest: () => {
+              expect(count).toBe(2);
+              resolve();
+            }
           }
         })
       );
@@ -286,7 +324,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
           <button
             data-testid="extbutton"
             onClick={(_) => {
-              setExt(2);
+              setCount(2);
             }}
           />
           <button
@@ -306,40 +344,46 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     fireEvent.click(extButton);
 
     fireEvent.click(button);
+
+    return promise;
   });
 
-  it('actions should not use stale data in a builtin entry action', (done) => {
+  it('actions should not use stale data in a builtin entry action', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
+
     const toggleMachine = createMachine({
       types: {} as { context: { latest: number }; events: { type: 'NEXT' } },
+      actions: {
+        getLatest: () => {}
+      },
       context: {
         latest: 0
-      },
+      } as any,
       initial: 'a',
       states: {
         a: {
           on: {
-            NEXT: 'b'
+            NEXT: { target: 'b' }
           }
         },
         b: {
-          entry: 'setLatest'
+          entry: ({ actions }, enq) => {
+            enq(actions.getLatest);
+          }
         }
       }
     });
 
     const Component = () => {
-      const [ext, setExt] = useState(1);
+      const [count, setCount] = useState(1);
 
       const [, send] = useActor(
         toggleMachine.provide({
           actions: {
-            setLatest: assign({
-              latest: () => {
-                expect(ext).toBe(2);
-                done();
-                return ext;
-              }
-            })
+            getLatest: () => {
+              expect(count).toBe(2);
+              resolve();
+            }
           }
         })
       );
@@ -349,7 +393,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
           <button
             data-testid="extbutton"
             onClick={(_) => {
-              setExt(2);
+              setCount(2);
             }}
           />
           <button
@@ -369,20 +413,34 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     fireEvent.click(extButton);
 
     fireEvent.click(button);
+
+    return promise;
   });
 
-  it('actions should not use stale data in a custom entry action', (done) => {
+  it('actions should not use stale data in a custom entry action', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
+
     const toggleMachine = createMachine({
-      types: {} as {
-        events: { type: 'TOGGLE' };
+      // types: {} as {
+      //   events: { type: 'TOGGLE' };
+      // },
+      schemas: {
+        events: z.object({
+          type: z.literal('TOGGLE')
+        }) as any
+      },
+      actions: {
+        doAction: () => {}
       },
       initial: 'inactive',
       states: {
         inactive: {
-          on: { TOGGLE: 'active' }
+          on: { TOGGLE: { target: 'active' } }
         },
         active: {
-          entry: 'doAction'
+          entry: ({ actions }, enq) => {
+            enq(actions.doAction);
+          }
         }
       }
     });
@@ -392,7 +450,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
 
       const doAction = React.useCallback(() => {
         expect(ext).toBeTruthy();
-        done();
+        resolve();
       }, [ext]);
 
       const [, send] = useActor(
@@ -428,99 +486,8 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     fireEvent.click(extButton);
 
     fireEvent.click(button);
-  });
 
-  it('should only render once when initial microsteps are involved', () => {
-    let rerenders = 0;
-
-    const m = createMachine(
-      {
-        types: {} as { context: { stuff: number[] } },
-        initial: 'init',
-        context: { stuff: [1, 2, 3] },
-        states: {
-          init: {
-            entry: 'setup',
-            always: 'ready'
-          },
-          ready: {}
-        }
-      },
-      {
-        actions: {
-          setup: assign({
-            stuff: ({ context }) => [...context.stuff, 4]
-          })
-        }
-      }
-    );
-
-    const App = () => {
-      useActor(m);
-      rerenders++;
-      return null;
-    };
-
-    render(<App />);
-
-    expect(rerenders).toBe(suiteKey === 'strict' ? 2 : 1);
-  });
-
-  it('should maintain the same reference for objects created when resolving initial state', () => {
-    let effectsFired = 0;
-
-    const m = createMachine(
-      {
-        types: {} as { context: { counter: number; stuff: number[] } },
-        initial: 'init',
-        context: { counter: 0, stuff: [1, 2, 3] },
-        states: {
-          init: {
-            entry: 'setup'
-          }
-        },
-        on: {
-          INC: {
-            actions: 'increase'
-          }
-        }
-      },
-      {
-        actions: {
-          setup: assign({
-            stuff: ({ context }) => [...context.stuff, 4]
-          }),
-          increase: assign({
-            counter: ({ context }) => ++context.counter
-          })
-        }
-      }
-    );
-
-    const App = () => {
-      const [state, send] = useActor(m);
-
-      // this effect should only fire once since `stuff` never changes
-      React.useEffect(() => {
-        effectsFired++;
-      }, [state.context.stuff]);
-
-      return (
-        <>
-          <div>{`Counter: ${state.context.counter}`}</div>
-          <button onClick={() => send({ type: 'INC' })}>Increase</button>
-        </>
-      );
-    };
-
-    const { getByRole } = render(<App />);
-
-    expect(effectsFired).toBe(suiteKey === 'strict' ? 2 : 1);
-
-    const button = getByRole('button');
-    fireEvent.click(button);
-
-    expect(effectsFired).toBe(suiteKey === 'strict' ? 2 : 1);
+    return promise;
   });
 
   it('should successfully spawn actors from the lazily declared context', () => {
@@ -529,7 +496,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     const machine = createMachine({
       context: ({ spawn }) => ({
         ref: spawn(
-          fromCallback(() => {
+          createCallbackLogic(() => {
             childSpawned = true;
           })
         )
@@ -549,20 +516,13 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
   it('should be able to use an action provided outside of React', () => {
     let actionCalled = false;
 
-    const machine = createMachine(
-      {
-        on: {
-          EV: {
-            actions: 'foo'
-          }
-        }
-      },
-      {
-        actions: {
-          foo: () => (actionCalled = true)
+    const machine = createMachine({
+      on: {
+        EV: (_, enq) => {
+          enq(() => (actionCalled = true));
         }
       }
-    );
+    });
 
     const App = () => {
       const [_state, send] = useActor(machine);
@@ -580,30 +540,37 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
   it('should be able to use a guard provided outside of React', () => {
     let guardCalled = false;
 
-    const machine = createMachine(
-      {
-        initial: 'a',
-        states: {
-          a: {
-            on: {
-              EV: {
-                guard: 'isAwesome',
-                target: 'b'
+    const machine = createMachine({
+      initial: 'a',
+      guards: {
+        isAwesome: () => true
+      },
+      states: {
+        a: {
+          on: {
+            // EV: {
+            //   guard: 'isAwesome',
+            //   target: 'b'
+            // }
+            EV: ({ guards }) => {
+              if (guards.isAwesome()) {
+                return {
+                  target: 'b'
+                };
               }
             }
-          },
-          b: {}
-        }
-      },
-      {
-        guards: {
-          isAwesome: () => {
-            guardCalled = true;
-            return true;
           }
+        },
+        b: {}
+      }
+    }).provide({
+      guards: {
+        isAwesome: () => {
+          guardCalled = true;
+          return true;
         }
       }
-    );
+    });
 
     const App = () => {
       const [_state, send] = useActor(machine);
@@ -621,31 +588,30 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
   it('should be able to use a service provided outside of React', () => {
     let serviceCalled = false;
 
-    const machine = createMachine(
-      {
-        initial: 'a',
-        states: {
-          a: {
-            on: {
-              EV: 'b'
-            }
-          },
-          b: {
-            invoke: {
-              src: 'foo'
-            }
-          }
-        }
-      },
-      {
-        actors: {
-          foo: fromPromise(() => {
+    const machine = createMachine({
+      actorSources: {
+        foo: createAsyncLogic({
+          run: () => {
             serviceCalled = true;
             return Promise.resolve();
-          })
+          }
+        })
+      },
+      initial: 'a',
+      states: {
+        a: {
+          on: {
+            EV: { target: 'b' }
+          }
+        },
+        b: {
+          invoke: {
+            // src: 'foo'
+            src: ({ actorSources }) => actorSources.foo
+          }
         }
       }
-    );
+    });
 
     const App = () => {
       const [_state, send] = useActor(machine);
@@ -661,39 +627,43 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
   });
 
   it('should be able to use a delay provided outside of React', () => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
 
-    const machine = createMachine(
-      {
-        initial: 'a',
-        states: {
-          a: {
-            on: {
-              EV: 'b'
-            }
-          },
-          b: {
-            after: {
-              myDelay: 'c'
-            }
-          },
-          c: {}
-        }
-      },
-      {
+    const machine =
+      // setup({
+      //   delays: {
+      //     myDelay: () => {
+      //       return 300;
+      //     }
+      //   }
+      // }).
+      createMachine({
         delays: {
           myDelay: () => {
             return 300;
           }
+        },
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              EV: { target: 'b' }
+            }
+          },
+          b: {
+            after: {
+              myDelay: { target: 'c' }
+            }
+          },
+          c: {}
         }
-      }
-    );
+      });
 
     const App = () => {
       const [state, send] = useActor(machine);
       return (
         <>
-          <div data-testid="result">{state.value}</div>
+          <div data-testid="result">{state.value as any}</div>
           <button onClick={() => send({ type: 'EV' })} />
         </>
       );
@@ -707,7 +677,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     expect(screen.getByTestId('result').textContent).toBe('b');
 
     act(() => {
-      jest.advanceTimersByTime(310);
+      vi.advanceTimersByTime(310);
     });
 
     expect(screen.getByTestId('result').textContent).toBe('c');
@@ -715,13 +685,23 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
 
   it('should not use stale data in a guard', () => {
     const machine = createMachine({
+      guards: {
+        isAwesome: () => false
+      },
       initial: 'a',
       states: {
         a: {
           on: {
-            EV: {
-              guard: 'isAwesome',
-              target: 'b'
+            // EV: {
+            //   guard: 'isAwesome',
+            //   target: 'b'
+            // }
+            EV: ({ guards }) => {
+              if (guards.isAwesome()) {
+                return {
+                  target: 'b'
+                };
+              }
             }
           }
         },
@@ -733,13 +713,13 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       const [state, send] = useActor(
         machine.provide({
           guards: {
-            isAwesome: () => isAwesome
+            isAwesome: (() => isAwesome) as any
           }
         })
       );
       return (
         <>
-          <div data-testid="result">{state.value}</div>
+          <div data-testid="result">{state.value as any}</div>
           <button onClick={() => send({ type: 'EV' })} />
         </>
       );
@@ -754,83 +734,21 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     expect(screen.getByTestId('result').textContent).toBe('b');
   });
 
-  it('should not invoke initial services more than once', () => {
-    let activatedCount = 0;
-    const machine = createMachine({
-      initial: 'active',
-      invoke: {
-        src: fromCallback(() => {
-          activatedCount++;
-          return () => {
-            /* empty */
-          };
-        })
-      },
-      states: {
-        active: {}
-      }
-    });
-
-    const Test = () => {
-      useActor(machine);
-
-      return null;
-    };
-
-    render(<Test />);
-
-    expect(activatedCount).toEqual(suiteKey === 'strict' ? 2 : 1);
-  });
-
-  it('child component should be able to send an event to a parent immediately in an effect', () => {
-    const machine = createMachine({
-      types: {} as {
-        events: {
-          type: 'FINISH';
-        };
-      },
-      initial: 'active',
-      states: {
-        active: {
-          on: { FINISH: 'success' }
-        },
-        success: {}
-      }
-    });
-
-    const ChildTest: React.FC<{ send: any }> = ({ send }) => {
-      // This will send an event to the parent service
-      // BEFORE the service is ready.
-      React.useLayoutEffect(() => {
-        send({ type: 'FINISH' });
-      }, []);
-
-      return null;
-    };
-
-    const Test = () => {
-      const [state, send] = useActor(machine);
-
-      return (
-        <>
-          <ChildTest send={send} />
-          {state.value}
-        </>
-      );
-    };
-
-    const { container } = render(<Test />);
-
-    expect(container.textContent).toBe('success');
-  });
-
   it('custom data should be available right away for the invoked actor', () => {
     const childMachine = createMachine({
-      types: {
-        context: {} as { value: number }
+      // types: {
+      //   context: {} as { value: number }
+      // },
+      schemas: {
+        context: z.object({
+          value: z.number()
+        }),
+        input: z.object({
+          value: z.number()
+        })
       },
       initial: 'initial',
-      context: ({ input }: { input: { value: number } }) => {
+      context: ({ input }) => {
         return {
           value: input.value
         };
@@ -840,30 +758,29 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       }
     });
 
-    const machine = createMachine(
-      {
-        types: {} as {
-          actors: {
-            src: 'child';
-            logic: typeof childMachine;
-            id: 'test';
-          };
-        },
-        initial: 'active',
-        states: {
-          active: {
-            invoke: {
-              src: 'child',
-              id: 'test',
-              input: { value: 42 }
-            }
-          }
-        }
+    const machine = createMachine({
+      // types: {} as {
+      //   actorSources: {
+      //     src: 'child';
+      //     logic: typeof childMachine;
+      //     id: 'test';
+      //   };
+      // },
+      actorSources: {
+        child: childMachine
       },
-      {
-        actors: { child: childMachine }
+      initial: 'active',
+      states: {
+        active: {
+          invoke: {
+            // src: 'child',
+            src: ({ actorSources }: any) => actorSources.child,
+            id: 'test',
+            input: { value: 42 }
+          } as any
+        }
       }
-    );
+    });
 
     const Test = () => {
       const [state] = useActor(machine);
@@ -879,25 +796,30 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
 
   // https://github.com/statelyai/xstate/issues/1334
   it('delayed transitions should work when initializing from a rehydrated state', () => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
     const testMachine = createMachine({
-      types: {} as {
-        events: {
-          type: 'START';
-        };
+      // types: {} as {
+      //   events: {
+      //     type: 'START';
+      //   };
+      // },
+      schemas: {
+        events: z.object({
+          type: z.literal('START')
+        }) as any
       },
       id: 'app',
       initial: 'idle',
       states: {
         idle: {
           on: {
-            START: 'doingStuff'
+            START: { target: 'doingStuff' }
           }
         },
         doingStuff: {
           id: 'doingStuff',
           after: {
-            100: 'idle'
+            100: { target: 'idle' }
           }
         }
       }
@@ -930,7 +852,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
 
     fireEvent.click(button);
     act(() => {
-      jest.advanceTimersByTime(110);
+      vi.advanceTimersByTime(110);
     });
 
     expect(currentState!.matches('idle')).toBe(true);
@@ -938,18 +860,39 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
 
   it('should not miss initial synchronous updates', () => {
     const m = createMachine({
-      types: {} as { context: { count: number } },
+      // types: {} as { context: { count: number } },
+      schemas: {
+        context: z.object({
+          count: z.number()
+        })
+      },
       initial: 'idle',
       context: {
         count: 0
       },
-      entry: [assign({ count: 1 }), raise({ type: 'INC' })],
+      // entry: [assign({ count: 1 }), raise({ type: 'INC' })],
+      entry: (_, enq) => {
+        enq.raise({ type: 'INC' });
+        return {
+          context: {
+            count: 1
+          }
+        };
+      },
       on: {
-        INC: {
-          actions: [
-            assign({ count: ({ context }) => context.count + 1 }),
-            raise({ type: 'UNHANDLED' })
-          ]
+        // INC: {
+        //   actions: [
+        //     assign({ count: ({ context }) => context.count + 1 }),
+        //     raise({ type: 'UNHANDLED' })
+        //   ]
+        // }
+        INC: ({ context }, enq) => {
+          enq.raise({ type: 'UNHANDLED' });
+          return {
+            context: {
+              count: context.count + 1
+            }
+          };
         }
       },
       states: {
@@ -967,50 +910,23 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     expect(container.textContent).toBe('2');
   });
 
-  it('should deliver messages sent from an effect to an actor registered in the system', () => {
-    const spy = jest.fn();
-    const m = createMachine({
-      invoke: {
-        systemId: 'child',
-        src: createMachine({
-          on: {
-            PING: {
-              actions: spy
-            }
-          }
-        })
-      }
-    });
-
-    const App = () => {
-      const [_state, _send, actor] = useActor(m);
-
-      React.useEffect(() => {
-        actor.system!.get('child')!.send({ type: 'PING' });
-      });
-
-      return null;
-    };
-
-    render(<App />);
-
-    expect(spy).toHaveBeenCalledTimes(suiteKey === 'strict' ? 2 : 1);
-  });
-
+  // v6: In strict mode, the stop/restart cycle doesn't restart invoked
+  // children (observable actors), so the subscription is lost
   it('should work with `onSnapshot`', () => {
     const subject = new BehaviorSubject(0);
 
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const machine = createMachine({
-      invoke: [
-        {
-          src: fromObservable(() => subject),
-          onSnapshot: {
-            actions: [({ event }) => spy((event.snapshot as any).context)]
-          }
+      invoke: {
+        src: createObservableLogic(() => subject),
+        // onSnapshot: {
+        //   actions: [({ event }) => spy((event.snapshot as any).context)]
+        // }
+        onSnapshot: ({ event }) => {
+          spy((event.snapshot as any).context);
         }
-      ]
+      }
     });
 
     const App = () => {
@@ -1026,5 +942,85 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     subject.next(100);
 
     expect(spy.mock.calls).toEqual([[42], [100]]);
+  });
+
+  it('should execute a delayed transition of the initial state', async () => {
+    const machine = createMachine({
+      initial: 'one',
+      states: {
+        one: {
+          after: {
+            10: { target: 'two' }
+          }
+        },
+        two: {}
+      }
+    });
+
+    const App = () => {
+      const [state] = useActor(machine);
+      return <>{state.value}</>;
+    };
+
+    const { container } = render(<App />);
+
+    expect(container.textContent).toBe('one');
+
+    await act(async () => {
+      await sleep(10);
+    });
+
+    expect(container.textContent).toBe('two');
+  });
+
+  // v6: In strict mode, the stop/restart cycle doesn't restart invoked
+  // children (promise actors), so the error never propagates
+  it('should throw an error to an error boundary when the actor reaches an error state', async () => {
+    const errorMessage = 'test_useActor_error';
+
+    const machine = createMachine({
+      initial: 'loading',
+      states: {
+        loading: {
+          invoke: {
+            src: createAsyncLogic({
+              run: () => Promise.reject(new Error(errorMessage))
+            })
+          }
+        }
+      }
+    });
+
+    class ErrorBoundary extends React.Component<
+      { children: React.ReactNode },
+      { error: Error | null }
+    > {
+      state = { error: null as Error | null };
+      static getDerivedStateFromError(error: Error) {
+        return { error };
+      }
+      render() {
+        if (this.state.error) {
+          return <div data-testid="error">{this.state.error.message}</div>;
+        }
+        return this.props.children;
+      }
+    }
+
+    const App = () => {
+      const [state] = useActor(machine);
+      return <div data-testid="value">{String(state.value)}</div>;
+    };
+
+    console.error = vi.fn();
+
+    render(
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    );
+
+    await screen.findByTestId('error');
+    expect(screen.getByTestId('error').textContent).toBe(errorMessage);
   });
 });

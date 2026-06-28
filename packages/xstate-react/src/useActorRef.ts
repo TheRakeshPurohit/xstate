@@ -1,74 +1,110 @@
 import { useEffect, useState } from 'react';
-import {
-  AnyActorLogic,
-  AnyActor,
-  AnyStateMachine,
-  createActor,
-  ActorRefFrom,
-  ActorOptions,
-  Observer,
-  toObserver,
-  SnapshotFrom
-} from 'xstate';
 import useIsomorphicLayoutEffect from 'use-isomorphic-layout-effect';
-import { stopRootWithRehydration } from './stopRootWithRehydration';
+import {
+  Actor,
+  ActorOptions,
+  AnyActorLogic,
+  AnyStateMachine,
+  Observer,
+  SnapshotFrom,
+  createActor,
+  toObserver,
+  type ConditionalRequired,
+  type IsNotNever,
+  type RequiredActorOptionsKeys
+} from 'xstate';
 
-export function useIdleActorRef(
-  logic: AnyActorLogic,
-  options: Partial<ActorOptions<AnyActorLogic>>
-): AnyActor {
-  let [[currentConfig, actorRef], setCurrent] = useState(() => {
-    const actorRef = createActor(logic, options);
-    return [logic.config, actorRef];
+export function useIdleActorRef<TLogic extends AnyActorLogic>(
+  logic: TLogic,
+  ...[options]: ConditionalRequired<
+    [
+      options?: ActorOptions<TLogic> & {
+        [K in RequiredActorOptionsKeys<TLogic>]: unknown;
+      }
+    ],
+    IsNotNever<RequiredActorOptionsKeys<TLogic>>
+  >
+): [Actor<TLogic>, (actorRef: Actor<TLogic>) => void] {
+  let [actorRef, setActorRef] = useState(() => {
+    return createActor(logic, options);
   });
 
-  if (logic.config !== currentConfig) {
+  if (logic.config !== (actorRef.logic as any).config) {
     const newActorRef = createActor(logic, {
       ...options,
       snapshot: (actorRef.getPersistedSnapshot as any)({
         __unsafeAllowInlineActors: true
       })
     });
-    setCurrent([logic.config, newActorRef]);
+    setActorRef(newActorRef);
     actorRef = newActorRef;
   }
 
   // TODO: consider using `useAsapEffect` that would do this in `useInsertionEffect` is that's available
   useIsomorphicLayoutEffect(() => {
-    (actorRef.logic as AnyStateMachine).implementations = (
-      logic as AnyStateMachine
+    (actorRef.logic as any as AnyStateMachine).implementations = (
+      logic as any as AnyStateMachine
     ).implementations;
   });
 
-  return actorRef;
+  return [actorRef, setActorRef];
 }
 
 export function useActorRef<TLogic extends AnyActorLogic>(
   machine: TLogic,
-  options: ActorOptions<TLogic> = {},
-  observerOrListener?:
-    | Observer<SnapshotFrom<TLogic>>
-    | ((value: SnapshotFrom<TLogic>) => void)
-): ActorRefFrom<TLogic> {
-  const actorRef = useIdleActorRef(machine, options);
+  ...[options, observerOrListener]: IsNotNever<
+    RequiredActorOptionsKeys<TLogic>
+  > extends true
+    ? [
+        options: ActorOptions<TLogic> & {
+          [K in RequiredActorOptionsKeys<TLogic>]: unknown;
+        },
+        observerOrListener?:
+          | Observer<SnapshotFrom<TLogic>>
+          | ((value: SnapshotFrom<TLogic>) => void)
+      ]
+    : [
+        options?: ActorOptions<TLogic>,
+        observerOrListener?:
+          | Observer<SnapshotFrom<TLogic>>
+          | ((value: SnapshotFrom<TLogic>) => void)
+      ]
+): Actor<TLogic> {
+  const [actorRef, setActorRef] = useIdleActorRef(machine, options);
 
   useEffect(() => {
     if (!observerOrListener) {
       return;
     }
-    let sub = actorRef.subscribe(toObserver(observerOrListener));
+    const sub = actorRef.subscribe(toObserver(observerOrListener));
     return () => {
       sub.unsubscribe();
     };
   }, [observerOrListener]);
 
   useEffect(() => {
+    // If the actor was stopped by a previous cleanup (e.g. strict mode),
+    // create a fresh actor. The setActorRef triggers a re-render so
+    // useSyncExternalStore re-subscribes to the new actor.
+    // Only recreate if externally stopped ('stopped' status from XSTATE_STOP),
+    // not if it completed naturally ('done'/'error' status).
+    if (
+      (actorRef as any)._processingStatus ===
+        2 /* ProcessingStatus.Stopped */ &&
+      (actorRef.getSnapshot() as any)?.status === 'stopped'
+    ) {
+      const newActor = createActor(machine, actorRef.options);
+      newActor.start();
+      setActorRef(newActor);
+      // No cleanup — the re-render will run this effect again with the
+      // new actorRef (which is Running), registering the stop cleanup then.
+      return;
+    }
     actorRef.start();
-
     return () => {
-      stopRootWithRehydration(actorRef);
+      actorRef.stop();
     };
   }, [actorRef]);
 
-  return actorRef as any;
+  return actorRef;
 }
