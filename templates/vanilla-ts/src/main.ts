@@ -1,10 +1,13 @@
 import './style.css';
 import { feedbackMachine } from './feedbackMachine';
-import {
-  AnyMachineSnapshot,
-  __unsafe_getAllOwnEventDescriptors,
-  createActor
-} from 'xstate';
+import { AnyMachineSnapshot, createActor } from 'xstate';
+import { createBrowserInspector } from '@statelyai/inspect';
+
+const { inspect } = createBrowserInspector({
+  // Comment out the line below to start the inspector
+  // autoStart: false
+  url: 'http://localhost:3000/registry/inspect'
+});
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
@@ -26,7 +29,9 @@ function getNextTransitions(state: AnyMachineSnapshot) {
   return state._nodes.flatMap((node) => [...node.transitions.values()]).flat(1);
 }
 
-const actor = createActor(feedbackMachine);
+const actor = createActor(feedbackMachine, {
+  inspect
+});
 
 (window as any).feedbackActor = actor;
 

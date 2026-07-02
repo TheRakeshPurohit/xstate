@@ -1,6 +1,6 @@
 {
   "name": "@xstate/vue",
-  "version": "3.0.0-beta.6",
+  "version": "6.0.0-alpha.1",
   "description": "XState tools for Vue",
   "keywords": [
     "state",
@@ -54,7 +54,7 @@
   },
   "peerDependencies": {
     "vue": "^3.0.0",
-    "xstate": "^5.0.0-beta.54"
+    "xstate": "workspace:^"
   },
   "peerDependenciesMeta": {
     "xstate": {
@@ -62,10 +62,9 @@
     }
   },
   "devDependencies": {
-    "@testing-library/jest-dom": "^6.1.4",
-    "@testing-library/vue": "^6.6.1",
-    "@vue/compiler-sfc": "^3.0.11",
-    "vue": "^3.0.11",
-    "xstate": "5.0.0-beta.54"
+    "@testing-library/vue": "^8.1.0",
+    "@vitejs/plugin-vue": "^5.1.2",
+    "vue": "3.5.27",
+    "xstate": "workspace:^"
   }
 }
