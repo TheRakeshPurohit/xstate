@@ -2,18 +2,29 @@ import isDevelopment from '#is-development';
 import { useCallback, useEffect } from 'react';
 import { useSyncExternalStore } from 'use-sync-external-store/shim';
 import {
-  ActorRefFrom,
-  AnyActorLogic,
+  Actor,
   ActorOptions,
-  SnapshotFrom
+  AnyActorLogic,
+  Snapshot,
+  SnapshotFrom,
+  createActor,
+  type ConditionalRequired,
+  type IsNotNever,
+  type RequiredActorOptionsKeys
 } from 'xstate';
 import { useIdleActorRef } from './useActorRef.ts';
-import { stopRootWithRehydration } from './stopRootWithRehydration.ts';
 
 export function useActor<TLogic extends AnyActorLogic>(
   logic: TLogic,
-  options: ActorOptions<TLogic> = {}
-): [SnapshotFrom<TLogic>, ActorRefFrom<TLogic>['send'], ActorRefFrom<TLogic>] {
+  ...[options]: ConditionalRequired<
+    [
+      options?: ActorOptions<TLogic> & {
+        [K in RequiredActorOptionsKeys<TLogic>]: unknown;
+      }
+    ],
+    IsNotNever<RequiredActorOptionsKeys<TLogic>>
+  >
+): [SnapshotFrom<TLogic>, Actor<TLogic>['send'], Actor<TLogic>] {
   if (
     isDevelopment &&
     !!logic &&
@@ -25,15 +36,18 @@ export function useActor<TLogic extends AnyActorLogic>(
     );
   }
 
-  const actorRef = useIdleActorRef(logic, options as any);
+  const [actorRef, setActorRef] = useIdleActorRef(logic, options);
 
   const getSnapshot = useCallback(() => {
     return actorRef.getSnapshot();
   }, [actorRef]);
 
   const subscribe = useCallback(
-    (handleStoreChange) => {
-      const { unsubscribe } = actorRef.subscribe(handleStoreChange);
+    (handleStoreChange: () => void) => {
+      const { unsubscribe } = actorRef.subscribe({
+        next: handleStoreChange,
+        error: handleStoreChange
+      });
       return unsubscribe;
     },
     [actorRef]
@@ -45,13 +59,30 @@ export function useActor<TLogic extends AnyActorLogic>(
     getSnapshot
   );
 
-  useEffect(() => {
-    actorRef.start();
+  const snapshotWithStatus =
+    'status' in actorSnapshot
+      ? (actorSnapshot as Snapshot<unknown>)
+      : undefined;
+  if (snapshotWithStatus?.status === 'error') {
+    throw snapshotWithStatus.error;
+  }
 
+  useEffect(() => {
+    if (
+      (actorRef as any)._processingStatus ===
+        2 /* ProcessingStatus.Stopped */ &&
+      (actorRef.getSnapshot() as any)?.status === 'stopped'
+    ) {
+      const newActor = createActor(logic, options);
+      newActor.start();
+      setActorRef(newActor);
+      return;
+    }
+    actorRef.start();
     return () => {
-      stopRootWithRehydration(actorRef);
+      actorRef.stop();
     };
   }, [actorRef]);
 
-  return [actorSnapshot, actorRef.send, actorRef] as any;
+  return [actorSnapshot, actorRef.send, actorRef];
 }
