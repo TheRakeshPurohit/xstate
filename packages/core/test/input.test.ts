@@ -1,27 +1,34 @@
 import { of } from 'rxjs';
-import { assign, createActor, spawnChild } from '../src';
-import { createMachine } from '../src/createMachine';
+import { createActor, createLogic, createMachine } from '../src';
 import {
-  fromCallback,
-  fromObservable,
-  fromPromise,
-  fromTransition
+  createCallbackLogic,
+  createObservableLogic,
+  createAsyncLogic
 } from '../src/actors';
+import z from 'zod';
 
 describe('input', () => {
   it('should create a machine with input', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const machine = createMachine({
-      types: {} as {
-        context: { count: number };
-        input: { startCount: number };
+      // types: {} as {
+      //   context: { count: number };
+      //   input: { startCount: number };
+      // },
+      schemas: {
+        context: z.object({
+          count: z.number()
+        }),
+        input: z.object({
+          startCount: z.number()
+        })
       },
       context: ({ input }) => ({
         count: input.startCount
       }),
-      entry: ({ context }) => {
-        spy(context.count);
+      entry: ({ context }, enq) => {
+        enq(spy, context.count);
       }
     });
 
@@ -30,22 +37,40 @@ describe('input', () => {
     expect(spy).toHaveBeenCalledWith(42);
   });
 
-  it('initial event should have input property', (done) => {
+  it('initial event should have input property', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
     const machine = createMachine({
+      schemas: {
+        input: z.object({
+          greeting: z.string()
+        })
+      },
       entry: ({ event }) => {
-        expect(event.input.greeting).toBe('hello');
-        done();
+        expect(
+          (event as unknown as { input: { greeting: string } }).input.greeting
+        ).toBe('hello');
+        resolve();
       }
     });
 
     createActor(machine, { input: { greeting: 'hello' } }).start();
+
+    return promise;
   });
 
   it('should error if input is expected but not provided', () => {
     const machine = createMachine({
-      types: {} as {
-        input: { greeting: string };
-        context: { message: string };
+      // types: {} as {
+      //   input: { greeting: string };
+      //   context: { message: string };
+      // },
+      schemas: {
+        input: z.object({
+          greeting: z.string()
+        }),
+        context: z.object({
+          message: z.string()
+        })
       },
       context: ({ input }) => {
         return { message: `Hello, ${input.greeting}` };
@@ -59,6 +84,9 @@ describe('input', () => {
 
   it('should be a type error if input is not expected yet provided', () => {
     const machine = createMachine({
+      schemas: {
+        context: z.object({ count: z.number() })
+      },
       context: { count: 42 }
     });
 
@@ -68,60 +96,100 @@ describe('input', () => {
     }).not.toThrowError();
   });
 
-  it('should provide input data to invoked machines', (done) => {
+  it('should provide input data to invoked machines', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
+
     const invokedMachine = createMachine({
-      types: {} as {
-        input: { greeting: string };
-        context: { greeting: string };
+      // types: {} as {
+      //   input: { greeting: string };
+      //   context: { greeting: string };
+      // },
+      schemas: {
+        input: z.object({
+          greeting: z.string()
+        }),
+        context: z.object({
+          greeting: z.string()
+        })
       },
       context: ({ input }) => input,
       entry: ({ context, event }) => {
         expect(context.greeting).toBe('hello');
-        expect(event.input.greeting).toBe('hello');
-        done();
+        expect(
+          (event as unknown as { input: { greeting: string } }).input.greeting
+        ).toBe('hello');
+        resolve();
       }
     });
 
     const machine = createMachine({
       invoke: {
         src: invokedMachine,
-        input: { greeting: 'hello' }
+        input: () => ({ greeting: 'hello' })
       }
     });
 
     createActor(machine).start();
+
+    return promise;
   });
 
-  it('should provide input data to spawned machines', (done) => {
+  it('should provide input data to spawned machines', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
     const spawnedMachine = createMachine({
-      types: {} as {
-        input: { greeting: string };
-        context: { greeting: string };
+      // types: {} as {
+      //   input: { greeting: string };
+      //   context: { greeting: string };
+      // },
+      schemas: {
+        input: z.object({
+          greeting: z.string()
+        }),
+        context: z.object({
+          greeting: z.string()
+        }),
+        events: {
+          greeting: z.object({ greeting: z.string() })
+        }
       },
       context({ input }) {
         return input;
       },
       entry: ({ context, event }) => {
         expect(context.greeting).toBe('hello');
-        expect(event.input.greeting).toBe('hello');
-        done();
+        expect(
+          (event as unknown as { input: { greeting: string } }).input.greeting
+        ).toBe('hello');
+        resolve();
       }
     });
 
     const machine = createMachine({
-      entry: assign(({ spawn }) => {
-        return {
-          ref: spawn(spawnedMachine, { input: { greeting: 'hello' } })
-        };
+      schemas: {
+        context: z.object({
+          ref: z.object({}).optional()
+        })
+      },
+      context: {
+        ref: undefined
+      },
+      entry: (_, enq) => ({
+        context: {
+          ref: enq.spawn(spawnedMachine, { input: { greeting: 'hello' } })
+        }
       })
     });
 
     createActor(machine).start();
+
+    return promise;
   });
 
   it('should create a promise with input', async () => {
-    const promiseLogic = fromPromise<{ count: number }, { count: number }>(
-      ({ input }) => Promise.resolve(input)
+    const promiseLogic = createAsyncLogic<{ count: number }, { count: number }>(
+      {
+        run: ({ input }) => Promise.resolve(input)
+      }
     );
 
     const promiseActor = createActor(promiseLogic, {
@@ -133,11 +201,38 @@ describe('input', () => {
     expect(promiseActor.getSnapshot().output).toEqual({ count: 42 });
   });
 
+  it('should infer async logic input from schemas', async () => {
+    const promiseLogic = createAsyncLogic({
+      schemas: {
+        input: z.object({ count: z.number() })
+      },
+      run: ({ input }) => {
+        input.count satisfies number;
+
+        // @ts-expect-error
+        input.missing;
+
+        return Promise.resolve(input);
+      }
+    });
+
+    const promiseActor = createActor(promiseLogic, {
+      input: { count: 42 }
+    }).start();
+
+    // @ts-expect-error
+    createActor(promiseLogic, { input: { count: 'not a number' } });
+
+    await new Promise((res) => setTimeout(res, 5));
+
+    expect(promiseActor.getSnapshot().output).toEqual({ count: 42 });
+  });
+
   it('should create a transition function actor with input', () => {
-    const transitionLogic = fromTransition(
-      (state) => state,
-      ({ input }) => input
-    );
+    const transitionLogic = createLogic({
+      context: ({ input }: { input: { count: number } }) => input,
+      run: () => undefined
+    });
 
     const transitionActor = createActor(transitionLogic, {
       input: { count: 42 }
@@ -146,8 +241,9 @@ describe('input', () => {
     expect(transitionActor.getSnapshot().context).toEqual({ count: 42 });
   });
 
-  it('should create an observable actor with input', (done) => {
-    const observableLogic = fromObservable<
+  it('should create an observable actor with input', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
+    const observableLogic = createObservableLogic<
       { count: number },
       { count: number }
     >(({ input }) => of(input));
@@ -159,50 +255,48 @@ describe('input', () => {
     const sub = observableActor.subscribe((state) => {
       if (state.context?.count !== 42) return;
       expect(state.context).toEqual({ count: 42 });
-      done();
       sub.unsubscribe();
+      resolve();
     });
 
     observableActor.start();
+
+    return promise;
   });
 
-  it('should create a callback actor with input', (done) => {
-    const callbackLogic = fromCallback(({ input }) => {
+  it('should create a callback actor with input', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
+    const callbackLogic = createCallbackLogic(({ input }) => {
       expect(input).toEqual({ count: 42 });
-      done();
+      resolve();
     });
 
     createActor(callbackLogic, {
       input: { count: 42 }
     }).start();
+
+    return promise;
   });
 
   it('should provide a static inline input to the referenced actor', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const child = createMachine({
-      context: ({ input }: { input: number }) => {
+      schemas: {
+        input: z.number()
+      },
+      context: ({ input }) => {
         spy(input);
         return {};
       }
     });
 
-    const machine = createMachine(
-      {
-        types: {} as {
-          actors: { src: 'child'; logic: typeof child };
-        },
-        invoke: {
-          src: 'child',
-          input: 42
-        }
-      },
-      {
-        actors: {
-          child
-        }
+    const machine = createMachine({
+      invoke: {
+        src: child,
+        input: () => 42
       }
-    );
+    });
 
     createActor(machine).start();
 
@@ -210,43 +304,35 @@ describe('input', () => {
   });
 
   it('should provide a dynamic inline input to the referenced actor', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const child = createMachine({
-      context: ({ input }: { input: number }) => {
+      schemas: {
+        input: z.number()
+      },
+      context: ({ input }) => {
         spy(input);
         return {};
       }
     });
 
-    const machine = createMachine(
-      {
-        types: {} as {
-          actors: {
-            src: 'child';
-            logic: typeof child;
-          };
-          input: number;
-          context: {
-            count: number;
-          };
-        },
-        context: ({ input }) => ({
-          count: input
+    const machine = createMachine({
+      schemas: {
+        context: z.object({
+          count: z.number()
         }),
-        invoke: {
-          src: 'child',
-          input: ({ context }) => {
-            return context.count + 100;
-          }
-        }
+        input: z.number()
       },
-      {
-        actors: {
-          child
+      context: ({ input }) => ({
+        count: input
+      }),
+      invoke: {
+        src: child,
+        input: ({ context }) => {
+          return context.count + 100;
         }
       }
-    );
+    });
 
     createActor(machine, { input: 42 }).start();
 
@@ -254,35 +340,14 @@ describe('input', () => {
   });
 
   it('should call the input factory with self when invoking', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const machine = createMachine({
       invoke: {
         src: createMachine({}),
-        input: ({ self }: any) => spy(self)
+        input: ({ self }) => spy(self)
       }
     });
-
-    const actor = createActor(machine).start();
-
-    expect(spy).toHaveBeenCalledWith(actor);
-  });
-
-  it('should call the input factory with self when spawning', () => {
-    const spy = jest.fn();
-
-    const machine = createMachine(
-      {
-        entry: spawnChild('child', {
-          input: ({ self }: any) => spy(self)
-        })
-      },
-      {
-        actors: {
-          child: createMachine({})
-        }
-      }
-    );
 
     const actor = createActor(machine).start();
 

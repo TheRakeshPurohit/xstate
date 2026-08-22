@@ -1,23 +1,31 @@
 import { Readable, readable } from 'svelte/store';
 import {
+  Actor,
   ActorOptions,
   AnyActorLogic,
-  ActorRefFrom,
-  EventFrom,
   SnapshotFrom,
-  AnyActorRef
+  type ConditionalRequired,
+  type IsNotNever,
+  type RequiredActorOptionsKeys
 } from 'xstate';
-import { useActorRef } from './useActorRef';
+import { useActorRef } from './useActorRef.ts';
 
 export function useActor<TLogic extends AnyActorLogic>(
   logic: TLogic,
-  options?: ActorOptions<TLogic>
+  ...[options]: ConditionalRequired<
+    [
+      options?: ActorOptions<TLogic> & {
+        [K in RequiredActorOptionsKeys<TLogic>]: unknown;
+      }
+    ],
+    IsNotNever<RequiredActorOptionsKeys<TLogic>>
+  >
 ): {
   snapshot: Readable<SnapshotFrom<TLogic>>;
-  send: (event: EventFrom<TLogic>) => void;
-  actorRef: ActorRefFrom<TLogic>;
+  send: Actor<TLogic>['send'];
+  actorRef: Actor<TLogic>;
 } {
-  const actorRef = useActorRef(logic, options) as AnyActorRef;
+  const actorRef = useActorRef(logic, options);
 
   let currentSnapshot = actorRef.getSnapshot();
 
@@ -30,5 +38,5 @@ export function useActor<TLogic extends AnyActorLogic>(
     }).unsubscribe;
   });
 
-  return { snapshot, send: actorRef.send, actorRef } as any;
+  return { snapshot, send: actorRef.send, actorRef };
 }
