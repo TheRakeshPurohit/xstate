@@ -2,10 +2,13 @@
   "extends": "@tsconfig/svelte/tsconfig.json",
   "compilerOptions": {
     "strict": true,
-    "types": ["jest"],
-    "moduleResolution": "node16",
-    "module": "node16",
+    "target": "es2020",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "moduleResolution": "nodenext",
+    "module": "nodenext",
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": ["vitest/globals"],
+    "verbatimModuleSyntax": false
   }
 }

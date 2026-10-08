@@ -1,11 +1,23 @@
 import { onDestroy } from 'svelte';
-import { ActorOptions, ActorRefFrom, AnyActorLogic, createActor } from 'xstate';
+import {
+  Actor,
+  ActorOptions,
+  AnyActorLogic,
+  createActor,
+  type ConditionalRequired,
+  type IsNotNever,
+  type RequiredActorOptionsKeys,
+  type RequiredActorOptionsFor
+} from 'xstate';
 
 export function useActorRef<TLogic extends AnyActorLogic>(
   logic: TLogic,
-  options?: ActorOptions<TLogic>
-): ActorRefFrom<TLogic> {
-  const actorRef = createActor(logic as any, options).start();
+  ...[options]: ConditionalRequired<
+    [options?: ActorOptions<TLogic> & RequiredActorOptionsFor<TLogic>],
+    IsNotNever<RequiredActorOptionsKeys<TLogic>>
+  >
+): Actor<TLogic> {
+  const actorRef = createActor(logic, options as ActorOptions<TLogic>).start();
   onDestroy(() => actorRef.stop());
-  return actorRef as any;
+  return actorRef;
 }

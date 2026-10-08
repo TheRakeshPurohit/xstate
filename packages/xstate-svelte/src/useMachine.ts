@@ -1,21 +1,20 @@
 import {
+  ActorOptions,
   AnyStateMachine,
-  AreAllImplementationsAssumedToBeProvided,
-  ActorOptions
+  type ConditionalRequired,
+  type IsNotNever,
+  type RequiredActorOptionsKeys,
+  type RequiredActorOptionsFor
 } from 'xstate';
-import { useActor } from './useActor';
+import { useActor } from './useActor.ts';
 
-type RestParams<TMachine extends AnyStateMachine> =
-  AreAllImplementationsAssumedToBeProvided<
-    TMachine['__TResolvedTypesMeta']
-  > extends false
-    ? [options: ActorOptions<TMachine>]
-    : [options?: ActorOptions<TMachine>];
-
-/** @deprecated */
+/** @alias useActor */
 export function useMachine<TMachine extends AnyStateMachine>(
   machine: TMachine,
-  ...[options = {}]: RestParams<TMachine>
+  ...[options]: ConditionalRequired<
+    [options?: ActorOptions<TMachine> & RequiredActorOptionsFor<TMachine>],
+    IsNotNever<RequiredActorOptionsKeys<TMachine>>
+  >
 ) {
   return useActor(machine, options);
 }

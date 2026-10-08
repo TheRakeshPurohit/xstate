@@ -1,9 +1,10 @@
+import { z } from 'zod';
 import {
   createMachine,
   createActor,
-  assign,
-  AnyActorRef,
-  sendParent
+  createCallbackLogic,
+  initialTransition,
+  transition
 } from '../src/index.ts';
 import { trackEntries } from './utils.ts';
 
@@ -14,8 +15,8 @@ describe('final states', () => {
 
     expect(actorRef.getSnapshot().status).toBe('done');
   });
-  it('output of a machine with a root state being final should be called with a "xstate.done.state.ROOT_ID" event', () => {
-    const spy = jest.fn();
+  it('output of a machine with a root state being final should receive its state ID', () => {
+    const spy = vi.fn();
     const machine = createMachine({
       type: 'final',
       output: ({ event }) => {
@@ -29,14 +30,15 @@ describe('final states', () => {
         [
           {
             "output": undefined,
-            "type": "xstate.done.state.(machine)",
+            "stateId": "(machine)",
+            "type": "xstate.done.state",
           },
         ],
       ]
     `);
   });
-  it('should emit the "xstate.done.state.*" event when all nested states are in their final states', () => {
-    const onDoneSpy = jest.fn();
+  it('should emit the done state event when all nested states are final', () => {
+    const onDoneSpy = vi.fn();
 
     const machine = createMachine({
       id: 'm',
@@ -49,7 +51,7 @@ describe('final states', () => {
               initial: 'a',
               states: {
                 a: {
-                  on: { NEXT_1: 'b' }
+                  on: { NEXT_1: { target: 'b' } }
                 },
                 b: {
                   type: 'final'
@@ -60,7 +62,7 @@ describe('final states', () => {
               initial: 'a',
               states: {
                 a: {
-                  on: { NEXT_2: 'b' }
+                  on: { NEXT_2: { target: 'b' } }
                 },
                 b: {
                   type: 'final'
@@ -68,11 +70,13 @@ describe('final states', () => {
               }
             }
           },
-          onDone: {
-            target: 'bar',
-            actions: ({ event }) => {
+          onDone: ({ event }, enq) => {
+            enq(() => {
               onDoneSpy(event.type);
-            }
+            });
+            return {
+              target: 'bar'
+            };
           }
         },
         bar: {}
@@ -89,7 +93,7 @@ describe('final states', () => {
     });
 
     expect(actor.getSnapshot().value).toBe('bar');
-    expect(onDoneSpy).toHaveBeenCalledWith('xstate.done.state.m.foo');
+    expect(onDoneSpy).toHaveBeenCalledWith('xstate.done.state');
   });
 
   it('should execute final child state actions first', () => {
@@ -99,21 +103,23 @@ describe('final states', () => {
       states: {
         foo: {
           initial: 'bar',
-          onDone: { actions: () => actual.push('fooAction') },
+          onDone: (_, enq) => {
+            enq(() => actual.push('fooAction'));
+          },
           states: {
             bar: {
               initial: 'baz',
-              onDone: 'barFinal',
+              onDone: { target: 'barFinal' },
               states: {
                 baz: {
                   type: 'final',
-                  entry: () => actual.push('bazAction')
+                  entry: (_, enq) => enq(() => actual.push('bazAction'))
                 }
               }
             },
             barFinal: {
               type: 'final',
-              entry: () => actual.push('barAction')
+              entry: (_, enq) => enq(() => actual.push('barAction'))
             }
           }
         }
@@ -125,13 +131,15 @@ describe('final states', () => {
     expect(actual).toEqual(['bazAction', 'barAction', 'fooAction']);
   });
 
-  it('should call output expressions on nested final nodes', (done) => {
-    interface Ctx {
-      revealedSecret?: string;
-    }
+  it('should call output expressions on nested final nodes', () => {
+    const { resolve, promise } = Promise.withResolvers<void>();
 
     const machine = createMachine({
-      types: {} as { context: Ctx },
+      schemas: {
+        context: z.object({
+          revealedSecret: z.string().optional()
+        })
+      },
       initial: 'secret',
       context: {
         revealedSecret: undefined
@@ -142,7 +150,7 @@ describe('final states', () => {
           states: {
             wait: {
               on: {
-                REQUEST_SECRET: 'reveal'
+                REQUEST_SECRET: { target: 'reveal' }
               }
             },
             reveal: {
@@ -152,13 +160,13 @@ describe('final states', () => {
               })
             }
           },
-          onDone: {
-            target: 'success',
-            actions: assign({
-              revealedSecret: ({ event }) => {
-                return (event.output as any).secret;
+          onDone: ({ event }) => {
+            return {
+              target: 'success',
+              context: {
+                revealedSecret: (event.output as any).secret
               }
-            })
+            };
           }
         },
         success: {
@@ -173,22 +181,29 @@ describe('final states', () => {
         expect(service.getSnapshot().context).toEqual({
           revealedSecret: 'the secret'
         });
-        done();
+        resolve();
       }
     });
     service.start();
 
     service.send({ type: 'REQUEST_SECRET' });
+
+    return promise;
   });
 
   it("should only call data expression once when entering root's final state", () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
     const machine = createMachine({
+      schemas: {
+        events: {
+          FINISH: z.object({ value: z.number() })
+        }
+      },
       initial: 'start',
       states: {
         start: {
           on: {
-            FINISH: 'end'
+            FINISH: { target: 'end' }
           }
         },
         end: {
@@ -203,12 +218,229 @@ describe('final states', () => {
     expect(spy).toBeCalledTimes(1);
   });
 
+  it('should use top-level final state output as machine output without root output', () => {
+    const machine = createMachine({
+      schemas: {
+        events: {
+          FINISH: z.object({ value: z.number() })
+        }
+      },
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            FINISH: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final',
+          output: ({ event }) => event.value * 2
+        }
+      }
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'FINISH', value: 21 });
+
+    expect(actorRef.getSnapshot().output).toBe(42);
+  });
+
+  it('should pass top-level final state output to root output mapper', () => {
+    const machine = createMachine({
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            FINISH: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final',
+          output: 'final output'
+        }
+      },
+      output: ({ output }) => `root: ${output}`
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'FINISH' });
+
+    expect(actorRef.getSnapshot().output).toBe('root: final output');
+  });
+
+  it('should keep root output-only behavior unchanged', () => {
+    const machine = createMachine({
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            FINISH: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final'
+        }
+      },
+      output: 'root output'
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'FINISH' });
+
+    expect(actorRef.getSnapshot().output).toBe('root output');
+  });
+
+  it('should leave machine output undefined without final or root output', () => {
+    const machine = createMachine({
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            FINISH: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final'
+        }
+      }
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'FINISH' });
+
+    expect(actorRef.getSnapshot().output).toBeUndefined();
+  });
+
+  it('should use the reached top-level final state output', () => {
+    const machine = createMachine({
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            PASS: { target: 'passed' },
+            FAIL: { target: 'failed' }
+          }
+        },
+        passed: {
+          type: 'final',
+          output: { status: 'passed' }
+        },
+        failed: {
+          type: 'final',
+          output: { status: 'failed' }
+        }
+      }
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'FAIL' });
+
+    expect(actorRef.getSnapshot().output).toEqual({ status: 'failed' });
+  });
+
+  it('should populate top-level final state output through pure transition', () => {
+    const machine = createMachine({
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            FINISH: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final',
+          output: 'done'
+        }
+      }
+    });
+
+    const [initialSnapshot] = initialTransition(machine, undefined);
+    const [nextSnapshot] = transition(machine, initialSnapshot, {
+      type: 'FINISH'
+    });
+
+    expect(nextSnapshot.output).toBe('done');
+  });
+
+  it('should populate top-level final state output through pure initialTransition', () => {
+    const machine = createMachine({
+      initial: 'end',
+      states: {
+        end: {
+          type: 'final',
+          output: 'done'
+        }
+      }
+    });
+
+    const [initialSnapshot] = initialTransition(machine, undefined);
+
+    expect(initialSnapshot.output).toBe('done');
+  });
+
+  it('should persist and restore top-level final state output', () => {
+    const machine = createMachine({
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            FINISH: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final',
+          output: 'persisted output'
+        }
+      }
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'FINISH' });
+    const persistedSnapshot = actorRef.getPersistedSnapshot();
+
+    expect(persistedSnapshot.output).toBe('persisted output');
+
+    const restoredActorRef = createActor(machine, {
+      snapshot: persistedSnapshot
+    }).start();
+
+    expect(restoredActorRef.getSnapshot().output).toBe('persisted output');
+  });
+
+  it('should resolve top-level final state output once on completion', () => {
+    const finalOutput = vi.fn(() => 'final output');
+
+    const machine = createMachine({
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            FINISH: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final',
+          output: finalOutput
+        }
+      },
+      output: ({ output }) => output
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'FINISH' });
+    actorRef.getSnapshot();
+    actorRef.getSnapshot();
+
+    expect(finalOutput).toHaveBeenCalledTimes(1);
+    expect(actorRef.getSnapshot().output).toBe('final output');
+  });
+
   it('output mapper should receive self', () => {
     const machine = createMachine({
-      types: {
-        output: {} as {
-          selfRef: AnyActorRef;
-        }
+      schemas: {
+        output: z.object({
+          selfRef: z.any()
+        })
       },
       initial: 'done',
       states: {
@@ -224,8 +456,13 @@ describe('final states', () => {
   });
 
   it('state output should be able to use context updated by the entry action of the reached final state', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
     const machine = createMachine({
+      schemas: {
+        context: z.object({
+          count: z.number()
+        })
+      },
       context: {
         count: 0
       },
@@ -236,22 +473,20 @@ describe('final states', () => {
           states: {
             a1: {
               on: {
-                NEXT: 'a2'
+                NEXT: { target: 'a2' }
               }
             },
             a2: {
               type: 'final',
-              entry: assign({
-                count: 1
+              entry: () => ({
+                context: {
+                  count: 1
+                }
               }),
               output: ({ context }) => context.count
             }
           },
-          onDone: {
-            actions: ({ event }) => {
-              spy(event.output);
-            }
-          }
+          onDone: ({ event }, enq) => enq(spy, event.output)
         }
       }
     });
@@ -276,7 +511,7 @@ describe('final states', () => {
                   states: {
                     start: {
                       on: {
-                        finish_one_alpha: 'finish'
+                        finish_one_alpha: { target: 'finish' }
                       }
                     },
                     finish: {
@@ -289,7 +524,7 @@ describe('final states', () => {
                   states: {
                     start: {
                       on: {
-                        finish_two_alpha: 'finish'
+                        finish_two_alpha: { target: 'finish' }
                       }
                     },
                     finish: {
@@ -307,7 +542,7 @@ describe('final states', () => {
                   states: {
                     start: {
                       on: {
-                        finish_three_beta: 'finish'
+                        finish_three_beta: { target: 'finish' }
                       }
                     },
                     finish: {
@@ -320,7 +555,7 @@ describe('final states', () => {
                   states: {
                     start: {
                       on: {
-                        finish_four_beta: 'finish'
+                        finish_four_beta: { target: 'finish' }
                       }
                     },
                     finish: {
@@ -331,7 +566,7 @@ describe('final states', () => {
               }
             }
           },
-          onDone: 'done'
+          onDone: { target: 'done' }
         },
         done: {
           type: 'final'
@@ -372,7 +607,7 @@ describe('final states', () => {
                   states: {
                     start: {
                       on: {
-                        finish_one_alpha: 'finish'
+                        finish_one_alpha: { target: 'finish' }
                       }
                     },
                     finish: {
@@ -385,7 +620,7 @@ describe('final states', () => {
                   states: {
                     start: {
                       on: {
-                        finish_two_alpha: 'finish'
+                        finish_two_alpha: { target: 'finish' }
                       }
                     },
                     finish: {
@@ -400,7 +635,7 @@ describe('final states', () => {
               states: {
                 three: {
                   on: {
-                    finish_beta: 'finish'
+                    finish_beta: { target: 'finish' }
                   }
                 },
                 finish: {
@@ -409,7 +644,7 @@ describe('final states', () => {
               }
             }
           },
-          onDone: 'done'
+          onDone: { target: 'done' }
         },
         done: {
           type: 'final'
@@ -450,7 +685,7 @@ describe('final states', () => {
                   states: {
                     start: {
                       on: {
-                        finish_one_alpha: 'finish'
+                        finish_one_alpha: { target: 'finish' }
                       }
                     },
                     finish: {
@@ -463,7 +698,7 @@ describe('final states', () => {
                   states: {
                     start: {
                       on: {
-                        finish_two_alpha: 'finish'
+                        finish_two_alpha: { target: 'finish' }
                       }
                     },
                     finish: {
@@ -478,7 +713,7 @@ describe('final states', () => {
               states: {
                 three: {
                   on: {
-                    finish_beta: 'finish'
+                    finish_beta: { target: 'finish' }
                   }
                 },
                 finish: {
@@ -487,7 +722,7 @@ describe('final states', () => {
               }
             }
           },
-          onDone: 'done'
+          onDone: { target: 'done' }
         },
         done: {
           type: 'final'
@@ -519,7 +754,7 @@ describe('final states', () => {
       states: {
         a: {
           type: 'parallel',
-          onDone: 'b',
+          onDone: { target: 'b' },
           states: {
             a1: {
               type: 'parallel',
@@ -551,7 +786,7 @@ describe('final states', () => {
       states: {
         a: {
           type: 'parallel',
-          onDone: 'b',
+          onDone: { target: 'b' },
           states: {
             a1: {
               type: 'parallel',
@@ -577,7 +812,7 @@ describe('final states', () => {
     expect(actorRef.getSnapshot().status).toEqual('done');
   });
   it('root output should be called with a "xstate.done.state.*" event of the parallel root when a direct final child of that parallel root is reached', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -596,8 +831,11 @@ describe('final states', () => {
       [
         [
           {
-            "output": undefined,
-            "type": "xstate.done.state.(machine)",
+            "output": {
+              "a": undefined,
+            },
+            "stateId": "(machine)",
+            "type": "xstate.done.state",
           },
         ],
       ]
@@ -605,7 +843,7 @@ describe('final states', () => {
   });
 
   it('root output should be called with a "xstate.done.state.*" event of the parallel root when a final child of its compound child is reached', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -629,8 +867,11 @@ describe('final states', () => {
       [
         [
           {
-            "output": undefined,
-            "type": "xstate.done.state.(machine)",
+            "output": {
+              "a": undefined,
+            },
+            "stateId": "(machine)",
+            "type": "xstate.done.state",
           },
         ],
       ]
@@ -638,7 +879,7 @@ describe('final states', () => {
   });
 
   it('root output should be called with a "xstate.done.state.*" event of the parallel root when a final descendant is reached 2 parallel levels deep', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -667,8 +908,13 @@ describe('final states', () => {
       [
         [
           {
-            "output": undefined,
-            "type": "xstate.done.state.(machine)",
+            "output": {
+              "a": {
+                "b": undefined,
+              },
+            },
+            "stateId": "(machine)",
+            "type": "xstate.done.state",
           },
         ],
       ]
@@ -676,7 +922,7 @@ describe('final states', () => {
   });
 
   it('onDone of an outer parallel state should be called with its own "xstate.done.state.*" event when its direct parallel child completes', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -697,11 +943,7 @@ describe('final states', () => {
               }
             }
           },
-          onDone: {
-            actions: ({ event }) => {
-              spy(event);
-            }
-          }
+          onDone: ({ event }, enq) => enq(spy, event)
         }
       }
     });
@@ -711,8 +953,13 @@ describe('final states', () => {
       [
         [
           {
-            "output": undefined,
-            "type": "xstate.done.state.(machine).a",
+            "output": {
+              "b": {
+                "c": undefined,
+              },
+            },
+            "stateId": "(machine).a",
+            "type": "xstate.done.state",
           },
         ],
       ]
@@ -720,7 +967,7 @@ describe('final states', () => {
   });
 
   it('onDone should not be called when the machine reaches its final state', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -734,19 +981,13 @@ describe('final states', () => {
                   type: 'final'
                 }
               },
-              onDone: {
-                actions: spy
-              }
+              onDone: (_, enq) => enq(spy)
             }
           },
-          onDone: {
-            actions: spy
-          }
+          onDone: (_, enq) => enq(spy)
         }
       },
-      onDone: {
-        actions: spy
-      }
+      onDone: (_, enq) => enq(spy)
     });
     createActor(machine).start();
 
@@ -754,7 +995,6 @@ describe('final states', () => {
   });
 
   it('machine should not complete when a parallel child of a compound state completes', () => {
-    const spy = jest.fn();
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -780,7 +1020,7 @@ describe('final states', () => {
   });
 
   it('root output should only be called once when multiple parallel regions complete at once', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const machine = createMachine({
       type: 'parallel',
@@ -800,8 +1040,48 @@ describe('final states', () => {
     expect(spy).toBeCalledTimes(1);
   });
 
+  it('should require root output to produce output for a parallel root', () => {
+    const withoutRootOutput = createMachine({
+      type: 'parallel',
+      states: {
+        a: {
+          type: 'final',
+          output: 'a output'
+        },
+        b: {
+          type: 'final',
+          output: 'b output'
+        }
+      }
+    });
+
+    expect(
+      createActor(withoutRootOutput).start().getSnapshot().output
+    ).toBeUndefined();
+
+    const withRootOutput = createMachine({
+      type: 'parallel',
+      states: {
+        a: {
+          type: 'final',
+          output: 'a output'
+        },
+        b: {
+          type: 'final',
+          output: 'b output'
+        }
+      },
+      output: ({ output }) => output
+    });
+
+    expect(createActor(withRootOutput).start().getSnapshot().output).toEqual({
+      a: 'a output',
+      b: 'b output'
+    });
+  });
+
   it('onDone of a parallel state should only be called once when multiple parallel regions complete at once', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const machine = createMachine({
       initial: 'a',
@@ -816,9 +1096,7 @@ describe('final states', () => {
               type: 'final'
             }
           },
-          onDone: {
-            actions: spy
-          }
+          onDone: (_, enq) => enq(spy)
         }
       }
     });
@@ -834,7 +1112,7 @@ describe('final states', () => {
       states: {
         a: {
           on: {
-            EV: 'b'
+            EV: { target: 'b' }
           }
         },
         b: {
@@ -848,7 +1126,7 @@ describe('final states', () => {
     const actorRef = createActor(machine).start();
     flushTracked();
 
-    // it's important to send an event here that results in a transition that computes new `state._nodes`
+    // it's important to send an event here that results in a transition that computes new `state.nodes`
     // and that could impact the order in which exit actions are called
     actorRef.send({ type: 'EV' });
 
@@ -871,7 +1149,7 @@ describe('final states', () => {
           states: {
             child_a1: {
               on: {
-                EV2: 'child_a2'
+                EV2: { target: 'child_a2' }
               }
             },
             child_a2: {
@@ -884,7 +1162,7 @@ describe('final states', () => {
           states: {
             child_b1: {
               on: {
-                EV1: 'child_b2'
+                EV1: { target: 'child_b2' }
               }
             },
             child_b2: {
@@ -899,7 +1177,7 @@ describe('final states', () => {
 
     const actorRef = createActor(machine).start();
 
-    // it's important to send an event here that results in a transition as that computes new `state._nodes`
+    // it's important to send an event here that results in a transition as that computes new `state.nodes`
     // and that could impact the order in which exit actions are called
     actorRef.send({ type: 'EV1' });
     flushTracked();
@@ -927,7 +1205,7 @@ describe('final states', () => {
           states: {
             child_a1: {
               on: {
-                EV2: 'child_a2'
+                EV2: { target: 'child_a2' }
               }
             },
             child_a2: {
@@ -940,7 +1218,7 @@ describe('final states', () => {
           states: {
             child_b1: {
               on: {
-                EV1: 'child_b2'
+                EV1: { target: 'child_b2' }
               }
             },
             child_b2: {
@@ -954,7 +1232,7 @@ describe('final states', () => {
     const flushTracked = trackEntries(machine);
 
     const actorRef = createActor(machine).start();
-    // it's important to send an event here that results in a transition as that computes new `state._nodes`
+    // it's important to send an event here that results in a transition as that computes new `state.nodes`
     // and that could impact the order in which exit actions are called
     actorRef.send({ type: 'EV1' });
     flushTracked();
@@ -982,7 +1260,7 @@ describe('final states', () => {
           states: {
             child_a1: {
               on: {
-                EV: 'child_a2'
+                EV: { target: 'child_a2' }
               }
             },
             child_a2: {
@@ -995,7 +1273,7 @@ describe('final states', () => {
           states: {
             child_b1: {
               on: {
-                EV: 'child_b2'
+                EV: { target: 'child_b2' }
               }
             },
             child_b2: {
@@ -1010,7 +1288,7 @@ describe('final states', () => {
 
     const actorRef = createActor(machine).start();
     flushTracked();
-    // it's important to send an event here that results in a transition as that computes new `state._nodes`
+    // it's important to send an event here that results in a transition as that computes new `state.nodes`
     // and that could impact the order in which exit actions are called
     actorRef.send({ type: 'EV' });
 
@@ -1083,7 +1361,7 @@ describe('final states', () => {
   });
 
   it('should not resolve output of a final state if its parent is a parallel state', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const machine = createMachine({
       initial: 'A',
@@ -1112,20 +1390,21 @@ describe('final states', () => {
   });
 
   it('should only call exit actions once when a child machine reaches its final state and sends an event to its parent that ends up stopping that child', () => {
-    const spy = jest.fn();
+    const spy = vi.fn();
 
     const child = createMachine({
       initial: 'start',
-      exit: spy,
+      exit: (_, enq) => enq(spy),
       states: {
         start: {
           on: {
-            CANCEL: 'canceled'
+            CANCEL: { target: 'canceled' }
           }
         },
         canceled: {
           type: 'final',
-          entry: sendParent({ type: 'CHILD_CANCELED' })
+          entry: ({ parent }, enq) =>
+            enq.sendTo(parent, { type: 'CHILD_CANCELED' })
         }
       }
     });
@@ -1136,10 +1415,10 @@ describe('final states', () => {
           invoke: {
             id: 'child',
             src: child,
-            onDone: 'completed'
+            onDone: { target: 'completed' }
           },
           on: {
-            CHILD_CANCELED: 'canceled'
+            CHILD_CANCELED: { target: 'canceled' }
           }
         },
         canceled: {},
@@ -1162,12 +1441,13 @@ describe('final states', () => {
       states: {
         start: {
           on: {
-            CANCEL: 'canceled'
+            CANCEL: { target: 'canceled' }
           }
         },
         canceled: {
           type: 'final',
-          entry: sendParent({ type: 'CHILD_CANCELED' })
+          entry: ({ parent }, enq) =>
+            enq.sendTo(parent, { type: 'CHILD_CANCELED' })
         }
       }
     });
@@ -1178,10 +1458,10 @@ describe('final states', () => {
           invoke: {
             id: 'child',
             src: child,
-            onDone: 'completed'
+            onDone: { target: 'completed' }
           },
           on: {
-            CHILD_CANCELED: 'canceled'
+            CHILD_CANCELED: { target: 'canceled' }
           }
         },
         canceled: {},
@@ -1205,14 +1485,17 @@ describe('final states', () => {
       states: {
         start: {
           on: {
-            CANCEL: 'canceled'
+            CANCEL: { target: 'canceled' }
           }
         },
         canceled: {
           type: 'final'
         }
       },
-      exit: sendParent({ type: 'CHILD_CANCELED' })
+      // exit: sendParent({ type: 'CHILD_CANCELED' })
+      exit: ({ parent }) => {
+        parent?.send({ type: 'CHILD_CANCELED' });
+      }
     });
     const parent = createMachine({
       initial: 'start',
@@ -1221,10 +1504,10 @@ describe('final states', () => {
           invoke: {
             id: 'child',
             src: child,
-            onDone: 'completed'
+            onDone: { target: 'completed' }
           },
           on: {
-            CHILD_CANCELED: 'canceled'
+            CHILD_CANCELED: { target: 'canceled' }
           }
         },
         canceled: {},
@@ -1240,5 +1523,185 @@ describe('final states', () => {
 
     // if `xstate.done.actor.*` would be delivered first the value would be `completed`
     expect(actorRef.getSnapshot().value).toBe('canceled');
+  });
+
+  it('should be possible to complete with a null output (directly on root)', () => {
+    const machine = createMachine({
+      initial: 'start',
+      schemas: {
+        output: z.null()
+      },
+      states: {
+        start: {
+          on: {
+            NEXT: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final'
+        }
+      },
+      output: null
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'NEXT' });
+
+    expect(actorRef.getSnapshot().output).toBe(null);
+  });
+
+  it("should be possible to complete with a null output (resolving with final state's output)", () => {
+    const machine = createMachine({
+      initial: 'start',
+      states: {
+        start: {
+          on: {
+            NEXT: { target: 'end' }
+          }
+        },
+        end: {
+          type: 'final',
+          output: null
+        }
+      },
+      output: ({ output }) => output
+    });
+
+    const actorRef = createActor(machine).start();
+    actorRef.send({ type: 'NEXT' });
+
+    expect(actorRef.getSnapshot().output).toBe(null);
+  });
+
+  it('warns when a top-level final state declares invoke, on or after', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      createMachine({
+        id: 'm',
+        initial: 'done',
+        states: {
+          done: {
+            type: 'final',
+            invoke: { src: createMachine({}) },
+            on: { go: {} },
+            after: { 100: {} }
+          }
+        }
+      });
+
+      expect(warn).toHaveBeenCalledWith(
+        'State "m.done" is final and declares "invoke", "on", "after"; final states cannot run actors or take transitions.'
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not start actors invoked by a top-level final state', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spy = vi.fn();
+    try {
+      const machine = createMachine({
+        initial: 'done',
+        states: {
+          done: {
+            type: 'final',
+            invoke: { src: createCallbackLogic(() => spy()) }
+          }
+        }
+      });
+      const [, effects] = initialTransition(machine);
+      expect(effects.map((effect) => effect.type)).toEqual([
+        '@xstate.terminate'
+      ]);
+
+      const actorRef = createActor(machine).start();
+
+      expect(actorRef.getSnapshot().status).toBe('done');
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('warns when a nested or parallel-region final state declares on', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      createMachine({
+        id: 'nested',
+        initial: 'a',
+        states: {
+          a: {
+            initial: 'inner',
+            states: {
+              inner: { type: 'final', on: { go: {} } }
+            }
+          }
+        }
+      });
+      createMachine({
+        id: 'par',
+        type: 'parallel',
+        states: {
+          region: { type: 'final', on: { go: {} } }
+        }
+      });
+
+      expect(warn.mock.calls.map((call) => call[0])).toEqual([
+        'State "nested.a.inner" is final and declares "on"; final states cannot run actors or take transitions.',
+        'State "par.region" is final and declares "on"; final states cannot run actors or take transitions.'
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not warn for plain final states', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            initial: 'inner',
+            states: { inner: { type: 'final' } }
+          },
+          done: { type: 'final' }
+        }
+      });
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('final regions under a parallel state take no transitions and start no actors', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spy = vi.fn();
+    try {
+      const machine = createMachine({
+        type: 'parallel',
+        states: {
+          a: {
+            type: 'final',
+            invoke: { src: createCallbackLogic(() => spy()) },
+            on: { go: { target: '#b-x' } }
+          },
+          b: {
+            initial: 'idle',
+            states: { idle: {}, x: { id: 'b-x' } }
+          }
+        }
+      });
+
+      const actorRef = createActor(machine).start();
+      actorRef.send({ type: 'go' });
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(actorRef.getSnapshot().value).toEqual({ a: {}, b: 'idle' });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

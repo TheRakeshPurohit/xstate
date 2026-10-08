@@ -1,7 +1,10 @@
 import './style.css';
 
 import { counterMachine } from './counterMachine';
-import { interpret } from 'xstate';
+import { createActor } from 'xstate';
+import { createInspector } from '@statelyai/sdk';
+
+const inspector = createInspector();
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
@@ -23,7 +26,9 @@ function render(count: number): void {
   outputEl.innerHTML = `Count is ${count}`;
 }
 
-const counterActor = interpret(counterMachine);
+const counterActor = createActor(counterMachine, {
+  inspect: inspector.inspect
+});
 
 counterActor.subscribe((state) => {
   render(state.context.count);
@@ -38,5 +43,3 @@ incrementButton?.addEventListener('click', () => {
 decrementButton?.addEventListener('click', () => {
   counterActor.send({ type: 'decrement' });
 });
-
-// setupCounter(document.querySelector<HTMLButtonElement>('#counter')!);

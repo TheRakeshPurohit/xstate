@@ -1,27 +1,32 @@
 import isDevelopment from '#is-development';
 import { Ref } from 'vue';
 import {
+  Actor,
   ActorOptions,
-  ActorRefFrom,
   AnyActorLogic,
-  EventFrom,
-  Snapshot,
-  SnapshotFrom
+  SnapshotFrom,
+  type ConditionalRequired,
+  type IsNotNever,
+  type RequiredActorOptionsKeys,
+  type RequiredActorOptionsFor
 } from 'xstate';
 import { useActorRef } from './useActorRef.ts';
 import { useSelector } from './useSelector.ts';
 
 export function useActor<TLogic extends AnyActorLogic>(
   actorLogic: TLogic,
-  options: ActorOptions<TLogic>
+  ...[options]: ConditionalRequired<
+    [options?: ActorOptions<TLogic> & RequiredActorOptionsFor<TLogic>],
+    IsNotNever<RequiredActorOptionsKeys<TLogic>>
+  >
 ): {
   snapshot: Ref<SnapshotFrom<TLogic>>;
-  send: (event: EventFrom<TLogic>) => void;
-  actorRef: ActorRefFrom<TLogic>;
+  send: Actor<TLogic>['send'];
+  actorRef: Actor<TLogic>;
 };
 export function useActor(
   actorLogic: AnyActorLogic,
-  options: ActorOptions<AnyActorLogic> = {}
+  options: ActorOptions<any> = {}
 ) {
   if (
     isDevelopment &&
@@ -33,11 +38,7 @@ export function useActor(
     );
   }
 
-  function listener(nextSnapshot: Snapshot<unknown>) {
-    snapshot.value = nextSnapshot;
-  }
-
-  const actorRef = useActorRef(actorLogic, options, listener);
+  const actorRef = useActorRef(actorLogic, options);
   const snapshot = useSelector(actorRef, (s) => s);
 
   return {

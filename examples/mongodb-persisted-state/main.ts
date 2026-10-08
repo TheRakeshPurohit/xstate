@@ -1,78 +1,71 @@
+import { createInterface } from 'node:readline';
+import { MongoClient } from 'mongodb';
 import { createActor } from 'xstate';
-import { MongoClient, ServerApiVersion } from 'mongodb';
 import { donutMachine } from './donutMachine';
+import { TaskQueue } from './TaskQueue';
+import { createInspector } from '@statelyai/sdk';
 
-const uri = '<your mongodb connection string>';
+const inspector = process.env.INSPECT ? createInspector() : undefined;
 
-const client = new MongoClient(uri, {
-  serverApi: ServerApiVersion.v1
-});
-const db = client.db('donut-maker');
-const donutCollection = db.collection('donuts');
-const options = { upsert: true };
+const uri = process.env.MONGODB_URI ?? 'mongodb://localhost:27017';
+
+const client = new MongoClient(uri);
+const donutCollection = client.db('donut-maker').collection('donuts');
 const filter = { persistedState: { $exists: true } };
 
-let restoredState;
+await client.connect();
 
-try {
-  await client.connect();
-  restoredState = await donutCollection.findOne();
-  if (!restoredState) {
-    console.log('no persisted state found in db. starting from scratch.');
-  }
-  console.log('restored state: ', restoredState);
+const stored = await donutCollection.findOne(filter);
 
-  const actor = createActor(donutMachine, {
-    state: restoredState?.persistedState
-  });
+if (!stored) {
+  console.log('No persisted state found in the db. Starting from scratch.');
+}
 
-  actor.subscribe({
-    async next(snapshot) {
-      // save persisted state to mongodb
-      const persistedState = actor.getPersistedState();
-      const updateDoc = {
-        $set: {
-          persistedState
-        }
-      };
+const actor = createActor(donutMachine, {
+  snapshot: stored?.persistedState,
+  inspect: inspector?.inspect
+});
 
-      const result = await donutCollection.updateOne(
+// Writes are queued so that snapshots reach the database in transition order.
+const taskQueue = new TaskQueue();
+const bold = (value: string) => `\x1b[1m${value}\x1b[0m`;
+
+actor.subscribe({
+  next(snapshot) {
+    const nextEvents = donutMachine.events.filter(
+      (type) => !type.startsWith('done.') && snapshot.can({ type })
+    );
+
+    taskQueue.addTask(async () => {
+      await donutCollection.updateOne(
         filter,
-        updateDoc,
-        options
+        { $set: { persistedState: actor.getPersistedSnapshot() } },
+        { upsert: true }
       );
-
-      // only log if the upsert occurred
-      if (result.modifiedCount > 0 || result.upsertedCount > 0) {
-        console.log('persisted state saved to db. ', result);
-      }
 
       console.log(
         'Current state:',
-        // the current state, bolded
-        `\x1b[1m${JSON.stringify(snapshot.value)}\x1b[0m\n`,
+        `${bold(JSON.stringify(snapshot.value))}\n`,
         'Next events:',
-        // the next events, each of them bolded
-        snapshot.nextEvents
-          .filter((event) => !event.startsWith('done.'))
-          .map((event) => `\n  \x1b[1m${event}\x1b[0m`)
-          .join(''),
+        nextEvents.map((type) => `\n  ${bold(type)}`).join(''),
         '\nEnter the next event to send:'
       );
-    },
-    async complete() {
-      console.log('workflow completed', actor.getSnapshot().output);
+    });
+  },
+  complete() {
+    taskQueue.addTask(async () => {
+      console.log('Workflow completed', actor.getSnapshot().output);
       await client.close();
-    }
-  });
+    });
+  }
+});
 
-  actor.start();
+actor.start();
 
-  process.stdin.on('data', (data) => {
-    const eventType = data.toString().trim();
-    actor.send({ type: eventType });
-  });
-} catch (e) {
-  console.log('error details: ', e);
-  restoredState = undefined;
+const input = createInterface({ input: process.stdin });
+
+for await (const line of input) {
+  actor.send({ type: line.trim() });
 }
+
+inspector?.destroy();

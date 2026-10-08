@@ -1,28 +1,42 @@
 import { onBeforeUnmount, onMounted } from 'vue';
 import {
+  Actor,
   ActorOptions,
-  ActorRefFrom,
   AnyActorLogic,
   Observer,
   SnapshotFrom,
   Subscription,
   createActor,
-  toObserver
+  toObserver,
+  type IsNotNever,
+  type RequiredActorOptionsKeys,
+  type RequiredActorOptionsFor
 } from 'xstate';
 
 export function useActorRef<TLogic extends AnyActorLogic>(
   actorLogic: TLogic,
-  options: ActorOptions<TLogic> = {},
-  observerOrListener?:
-    | Observer<SnapshotFrom<TLogic>>
-    | ((value: SnapshotFrom<TLogic>) => void)
-): ActorRefFrom<TLogic> {
-  const actorRef = createActor(actorLogic as any, options);
+  ...[options, observerOrListener]: IsNotNever<
+    RequiredActorOptionsKeys<TLogic>
+  > extends true
+    ? [
+        options: ActorOptions<TLogic> & RequiredActorOptionsFor<TLogic>,
+        observerOrListener?:
+          | Observer<SnapshotFrom<TLogic>>
+          | ((value: SnapshotFrom<TLogic>) => void)
+      ]
+    : [
+        options?: ActorOptions<TLogic>,
+        observerOrListener?:
+          | Observer<SnapshotFrom<TLogic>>
+          | ((value: SnapshotFrom<TLogic>) => void)
+      ]
+): Actor<TLogic> {
+  const actorRef = createActor(actorLogic, options as ActorOptions<TLogic>);
 
   let sub: Subscription;
   onMounted(() => {
     if (observerOrListener) {
-      sub = actorRef.subscribe(toObserver(observerOrListener as any));
+      sub = actorRef.subscribe(toObserver(observerOrListener));
     }
     actorRef.start();
   });
@@ -32,5 +46,5 @@ export function useActorRef<TLogic extends AnyActorLogic>(
     sub?.unsubscribe();
   });
 
-  return actorRef as ActorRefFrom<TLogic>;
+  return actorRef;
 }

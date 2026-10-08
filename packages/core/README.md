@@ -1,29 +1,191 @@
 <p align="center">
-  <a href="https://xstate.js.org">
   <br />
-  <img src="https://i.imgur.com/FshbFOv.png" alt="XState" width="100"/>
+
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statelyai/public-assets/main/logos/xstate-logo-white-nobg.svg">
+    <img alt="XState logotype" src="https://raw.githubusercontent.com/statelyai/public-assets/main/logos/xstate-logo-black-nobg.svg" width="200">
+  </picture>
   <br />
-    <sub><strong>JavaScript state machines and statecharts</strong></sub>
+    <strong>Actor-based state management & orchestration for complex app logic.</strong> <a href="https://stately.ai/docs">→ Documentation</a>
   <br />
   <br />
-  </a>
 </p>
 
-[![npm version](https://badge.fury.io/js/xstate.svg)](https://badge.fury.io/js/xstate)
-[![Statecharts gitter chat](https://badges.gitter.im/gitterHQ/gitter.png)](https://gitter.im/statecharts/statecharts)
-<img src="https://opencollective.com/xstate/tiers/backer/badge.svg?label=sponsors&color=brightgreen" />
+<!-- runtime dependencies and public entry points from package.json -->
 
-JavaScript and TypeScript [finite state machines](https://en.wikipedia.org/wiki/Finite-state_machine) and [statecharts](https://www.sciencedirect.com/science/article/pii/0167642387900359/pdf) for the modern web.
+XState is a state management and orchestration solution for JavaScript and TypeScript apps. The `xstate` package has _zero_ runtime dependencies. XState is useful for frontend and backend application logic.
 
-📖 [Read the documentation](https://xstate.js.org/docs)
-📑 Inspired by the [SCXML specification](https://www.w3.org/TR/scxml/).
+It uses event-driven programming, state machines, statecharts, and the actor model to handle complex logic in predictable, robust, and visual ways. XState provides a powerful and flexible way to manage application and workflow state by allowing developers to model logic as actors and state machines.
 
-## Packages
+<!-- experimental whole-system transitions from packages/core/src/systemTransition.ts -->
 
-- 🤖 `xstate` - Core finite state machine and statecharts library + interpreter
-- [📉 `@xstate/graph`](https://github.com/statelyai/xstate/tree/main/packages/xstate-graph) - Graph traversal utilities for XState
-- [⚛️ `@xstate/react`](https://github.com/statelyai/xstate/tree/main/packages/xstate-react) - React hooks and utilities for using XState in React applications
-- [✅ `@xstate/test`](https://github.com/statelyai/xstate/tree/main/packages/xstate-test) - Model-based testing utilities for XState
+For pure actor-system simulation, `initialSystemTransition`, `systemTransition`
+and `advanceSystemTime` return an immutable system snapshot and external effects
+as data. Branch or replay actors, messages and virtual timers without starting live
+actors. See [pure system transitions](../../docs/system-transitions.md).
+
+<!-- durable execution and checkpoint restoration from packages/core/src/durable/index.ts -->
+
+For durable hosts, the experimental `xstate/durable` entry point provides
+`createDurable`. Resume a checkpoint with `execution.restore(persistedSnapshot)`
+and execute the returned effects to restart active embedded children and pending
+timers without replaying entry actions. Await `executeEffects()` before persisting
+to retain accepted timer deadlines. The host handles root error snapshots;
+`run()` rejects with the root error. See [durable execution](../../docs/durable-execution.md).
+
+<!-- state context refinements from packages/core/src/setup.ts and packages/core/src/State.ts -->
+
+For [typestates](../../docs/typestates.md), declare state-level `schemas.context`
+in `setup({ states })`. State functions receive narrowed context, transitions
+check the target context requirements, and `snapshot.matches(...)` narrows
+context when reading snapshots.
+
+<!-- typed inline invocation from packages/core/src/setup.ts -->
+
+Use `s.createInvoke({ src, input, onDone })` inline in `s.createMachine(...)` for an actor used in one state. It infers the actor's input and output and the enclosing state's narrowed context without registering that actor in `setup.actors`. See [typed inline invokes](../../docs/invoke.md#typed-inline-invokes).
+
+Pass an async function directly as `src`, with `schemas.input`, `schemas.output`, and `schemas.error` on the same invoke. Output also infers from the async return when its schema is omitted. Existing logic values use their own schemas.
+
+The helper requires input for actors whose input excludes `undefined`, and checks child IDs and source compatibility against `schemas.children` declared in the setup or machine.
+
+<!-- graph traversal events from packages/core/src/graph/index.ts -->
+
+`getAllOwnEvents(snapshot)` from `xstate/graph` includes invoke completions, errors, and delayed events. Compose it with custom traversal payloads: supplied `events` replace the defaults. See [model-based testing](../../docs/model-based-testing.md).
+
+<!-- JSON loading and runtime validation from packages/core/src/createMachineFromConfig.ts -->
+
+Revive JSON definitions with `createMachineFromConfig(json, { schemas, validator, ...sources })` to restore runtime validation. The loader validates structural keys and references and copies its input; serialized definitions are independent copies. See [serialization](../../docs/serialization.md).
+
+For flat finite state machines, `xstate/fsm` provides a tiny pure transition
+table with context and TypeScript support:
+
+<!-- public exports from packages/core/src/fsm/index.ts; exact capabilities documented in docs/fsm.md -->
+
+```ts
+import { createFSM } from 'xstate/fsm';
+
+const machine = createFSM({
+  initial: 'inactive',
+  states: {
+    inactive: { on: { toggle: 'active' } },
+    active: { on: { toggle: 'inactive' } }
+  }
+});
+
+let state = machine.initialState;
+[state] = machine.transition(state, { type: 'toggle' });
+```
+
+The FSM is also actor logic, so `createActor(machine)` from `xstate` runs it.
+
+For typed context, event payloads, or state-specific context snapshots, use
+`setup` and `types` from `xstate/fsm`. These schemas are type-only in this
+subpath; use root `xstate` for runtime schema validation.
+
+See the [exact supported surface](https://stately.ai/docs/fsm). Use the root `xstate`
+entry point for compound or parallel statecharts, invocation, named sources,
+runtime schemas, serialization and inspection.
+
+### ✨ Create state machines visually in Stately Studio → [state.new](https://state.new)
+
+---
+
+📖 [Read the documentation](https://stately.ai/docs)
+
+➡️ [Create state machines with the Stately Editor](https://stately.ai/editor)
+
+🖥 [Download our VS Code extension](https://marketplace.visualstudio.com/items?itemName=statelyai.stately-vscode)
+
+📑 Inspired by the [SCXML specification](https://www.w3.org/TR/scxml/)
+
+<!-- public SCXML entry point from packages/xstate-scxml/src/index.ts -->
+
+Create machines from SCXML documents with the separate [`@xstate/scxml`](../xstate-scxml) package. See the [SCXML guide](../../docs/scxml.md).
+
+💬 Chat on the [Stately Discord Community](https://discord.gg/xstate)
+
+✍️ Browse through the many [XState examples](https://github.com/statelyai/xstate/tree/main/examples)
+
+## Templates
+
+Get started by forking one of these templates on CodeSandbox:
+
+<table>
+<thead>
+<tr><th>Template</th><th></th></tr>
+</thead>
+<tbody>
+
+<tr>
+<td>
+
+[🤖 XState Template (CodeSandbox)](https://codesandbox.io/p/devbox/github/statelyai/xstate/tree/main/templates/vanilla-ts)
+
+[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/statelyai/xstate/tree/main/templates/vanilla-ts?file=%2Fsrc%2FfeedbackMachine.ts)
+
+</td>
+<td>
+
+- XState v5
+- TypeScript
+- _No framework_
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+[⚛️ XState + React Template (CodeSandbox)](https://codesandbox.io/p/devbox/github/statelyai/xstate/tree/main/templates/react-ts)
+
+[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/statelyai/xstate/tree/main/templates/react-ts?file=%2Fsrc%2FfeedbackMachine.ts)
+
+</td>
+<td>
+
+- [React](https://react.dev/)
+- XState v5
+- TypeScript
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+[💚 XState + Vue Template (CodeSandbox)](https://codesandbox.io/p/devbox/github/statelyai/xstate/tree/main/templates/vue-ts)
+
+[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/statelyai/xstate/tree/main/templates/vue-ts?file=%2Fsrc%2FfeedbackMachine.ts)
+
+</td>
+<td>
+
+- [Vue](https://vuejs.org/)
+- XState v5
+- TypeScript
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+[🧡 XState + Svelte Template (CodeSandbox)](https://codesandbox.io/p/devbox/github/statelyai/xstate/tree/main/templates/svelte-ts)
+
+[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/statelyai/xstate/tree/main/templates/svelte-ts?file=%2Fsrc%2FfeedbackMachine.ts)
+
+</td>
+<td>
+
+- [Svelte](https://svelte.dev/)
+- XState v5
+- TypeScript
+
+</td>
+</tr>
+
+</tbody>
+</table>
 
 ## Super quick start
 
@@ -31,46 +193,59 @@ JavaScript and TypeScript [finite state machines](https://en.wikipedia.org/wiki/
 npm install xstate
 ```
 
-```js
-import { createMachine, interpret } from 'xstate';
+```ts
+import { createMachine, createActor } from 'xstate';
 
-// Stateless machine definition
-// machine.transition(...) is a pure function used by the interpreter.
+// State machine
 const toggleMachine = createMachine({
   id: 'toggle',
   initial: 'inactive',
+  context: {
+    count: 0
+  },
   states: {
-    inactive: { on: { TOGGLE: 'active' } },
-    active: { on: { TOGGLE: 'inactive' } }
+    inactive: {
+      on: {
+        TOGGLE: { target: 'active' }
+      }
+    },
+    active: {
+      entry: ({ context }) => ({
+        context: { count: context.count + 1 }
+      }),
+      on: {
+        TOGGLE: { target: 'inactive' }
+      }
+    }
   }
 });
 
-// Machine instance with internal state
-const toggleService = interpret(toggleMachine)
-  .onTransition((state) => console.log(state.value))
-  .start();
-// => 'inactive'
+// Actor (instance of the machine logic, like a store)
+const toggleActor = createActor(toggleMachine);
+toggleActor.subscribe((state) => console.log(state.value, state.context));
+toggleActor.start();
+// => logs 'inactive', { count: 0 }
 
-toggleService.send({ type: 'TOGGLE' });
-// => 'active'
+toggleActor.send({ type: 'TOGGLE' });
+// => logs 'active', { count: 1 }
 
-toggleService.send({ type: 'TOGGLE' });
-// => 'inactive'
+toggleActor.send({ type: 'TOGGLE' });
+// => logs 'inactive', { count: 1 }
 ```
 
-- [Visualizer](#visualizer)
-- [Why? (info about statecharts)](#why)
-- [Installation](https://xstate.js.org/docs/guides/installation.html)
-- [Finite State Machines](#finite-state-machines)
-- [Hierarchical (Nested) State Machines](#hierarchical--nested--state-machines)
-- [Parallel State Machines](#parallel-state-machines)
-- [History States](#history-states)
+## [Stately Studio](https://stately.ai)
 
-## Visualizer
+- Visually create, edit, and collaborate on state machines
+- Export to many formats, including XState v5
+- Test path & documentation autogeneration
+- Deploy to Stately Sky
+- Generate & modify machines with Stately AI
 
-**[Visualize, simulate, and share your statecharts in XState Viz!](https://stately.ai/viz)**
+<a href="https://stately.ai/registry/new?ref=github" title="Stately Studio">
+  <img src="https://github.com/statelyai/xstate/assets/1093738/74ed9cbc-b824-4ed7-a16d-f104947af8a7" alt="XState Viz" width="800" />
+</a>
 
-<a href="https://stately.ai/viz" title="xstate visualizer"><img src="https://i.imgur.com/3pEB0B3.png" alt="xstate visualizer" width="300" /></a>
+**[state.new](https://stately.ai/registry/new?ref=github)**
 
 ## Why?
 
@@ -80,17 +255,27 @@ Read [📽 the slides](http://slides.com/davidkhourshid/finite-state-machines) (
 
 - [Statecharts - A Visual Formalism for Complex Systems](https://www.sciencedirect.com/science/article/pii/0167642387900359/pdf) by David Harel
 - [The World of Statecharts](https://statecharts.github.io/) by Erik Mogensen
-- [Pure UI](https://rauchg.com/2015/pure-ui) by Guillermo Rauch
-- [Pure UI Control](https://medium.com/@asolove/pure-ui-control-ac8d1be97a8d) by Adam Solove
-- [Stately Discord](https://discord.gg/xstate) chat about anything related to statecharts and XState
-- [GitHub Discussions](https://github.com/statelyai/xstate/discussions)
+
+## Packages
+
+| Package                                                                                     | Description                                                                  |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 🤖 `xstate`                                                                                 | Core finite state machine and statecharts library + interpreter              |
+| [⚛️ `@xstate/react`](https://github.com/statelyai/xstate/tree/main/packages/xstate-react)   | React hooks and utilities for using XState in React applications             |
+| [💚 `@xstate/vue`](https://github.com/statelyai/xstate/tree/main/packages/xstate-vue)       | Vue composition functions and utilities for using XState in Vue applications |
+| [🎷 `@xstate/svelte`](https://github.com/statelyai/xstate/tree/main/packages/xstate-svelte) | Svelte utilities for using XState in Svelte applications                     |
+| [🥏 `@xstate/solid`](https://github.com/statelyai/xstate/tree/main/packages/xstate-solid)   | Solid hooks and utilities for using XState in Solid applications             |
 
 ## Finite State Machines
 
-<img src="https://imgur.com/rqqmkJh.png" alt="Light Machine" width="300" />
+<table>
+<thead><tr><th>Code</th><th>Statechart</th></tr></thead>
+<tbody>
+<tr>
+<td>
 
 ```js
-import { createMachine } from 'xstate';
+import { createMachine, createActor } from 'xstate';
 
 const lightMachine = createMachine({
   id: 'light',
@@ -114,21 +299,57 @@ const lightMachine = createMachine({
   }
 });
 
-const currentState = 'green';
+const actor = createActor(lightMachine);
 
-const nextState = lightMachine.transition(currentState, {
-  type: 'TIMER'
-}).value;
+actor.subscribe((state) => {
+  console.log(state.value);
+});
 
-// => 'yellow'
+actor.start();
+// logs 'green'
+
+actor.send({ type: 'TIMER' });
+// logs 'yellow'
 ```
+
+<table>
+<thead><tr><th>Code</th><th>Statechart</th></tr></thead>
+<tbody>
+<tr>
+<td>
+
+</td>
+<td>
+
+</td>
+</tr>
+</tbody>
+</table>
+
+</td>
+<td>
+
+<a href="https://stately.ai/registry/editor/fa443471-b416-4014-8e6f-12417863e4d4?mode=design&machineId=27e86036-f2f7-40f1-9d1e-66ce6e1accc0" title="Finite states">
+  <img src="https://github.com/statelyai/xstate/assets/1093738/36d4b6b5-e3d0-4c19-9f41-2e3425ceac88" alt="Finite states" width="400" />
+  <br />
+  Open in Stately Studio
+</a>
+<br />
+
+</td>
+</tbody>
+</table>
 
 ## Hierarchical (Nested) State Machines
 
-<img src="https://imgur.com/GDZAeB9.png" alt="Hierarchical Light Machine" width="300" />
+<table>
+<thead><tr><th>Code</th><th>Statechart</th></tr></thead>
+<tbody>
+<tr>
+<td>
 
 ```js
-import { createMachine } from 'xstate';
+import { createMachine, createActor } from 'xstate';
 
 const pedestrianStates = {
   initial: 'walk',
@@ -170,46 +391,49 @@ const lightMachine = createMachine({
   }
 });
 
-const currentState = 'yellow';
+const actor = createActor(lightMachine);
 
-const nextState = lightMachine.transition(currentState, {
-  type: 'TIMER'
-}).value;
-// => {
-//   red: 'walk'
-// }
+actor.subscribe((state) => {
+  console.log(state.value);
+});
 
-lightMachine.transition('red.walk', { type: 'PED_TIMER' }).value;
-// => {
-//   red: 'wait'
-// }
+actor.start();
+// logs 'green'
+
+actor.send({ type: 'TIMER' });
+// logs 'yellow'
+
+actor.send({ type: 'TIMER' });
+// logs { red: 'walk' }
+
+actor.send({ type: 'PED_TIMER' });
+// logs { red: 'wait' }
 ```
 
-**Object notation for hierarchical states:**
-
-```js
-// ...
-const waitState = lightMachine.transition(
-  { red: 'walk' },
-  { type: 'PED_TIMER' }
-).value;
-
-// => { red: 'wait' }
-
-lightMachine.transition(waitState, { type: 'PED_TIMER' }).value;
-
-// => { red: 'stop' }
-
-lightMachine.transition({ red: 'stop' }, { type: 'TIMER' }).value;
-
-// => 'green'
-```
+</td>
+<td>
+<a href="https://stately.ai/registry/editor/fa443471-b416-4014-8e6f-12417863e4d4?mode=design&machineId=30dffcdd-16c2-49e2-bfc6-a674057cb271" title="Hierarchical states">
+  <img src="https://github.com/statelyai/xstate/assets/1093738/32b0692b-1c29-4469-b5e3-03146e3ef249" alt="Hierarchical states" width="400" />
+  <br />
+  Open in Stately Studio
+</a>
+<br />
+</td>
+</tr>
+</tbody>
+</table>
 
 ## Parallel State Machines
 
-<img src="https://imgur.com/GKd4HwR.png" width="300" alt="Parallel state machine" />
+<table>
+<thead><tr><th>Code</th><th>Statechart</th></tr></thead>
+<tbody>
+<tr>
+<td>
 
-```js
+```ts
+import { createMachine, createActor } from 'xstate';
+
 const wordMachine = createMachine({
   id: 'word',
   type: 'parallel',
@@ -218,10 +442,10 @@ const wordMachine = createMachine({
       initial: 'off',
       states: {
         on: {
-          on: { TOGGLE_BOLD: 'off' }
+          on: { TOGGLE_BOLD: { target: 'off' } }
         },
         off: {
-          on: { TOGGLE_BOLD: 'on' }
+          on: { TOGGLE_BOLD: { target: 'on' } }
         }
       }
     },
@@ -229,10 +453,10 @@ const wordMachine = createMachine({
       initial: 'off',
       states: {
         on: {
-          on: { TOGGLE_UNDERLINE: 'off' }
+          on: { TOGGLE_UNDERLINE: { target: 'off' } }
         },
         off: {
-          on: { TOGGLE_UNDERLINE: 'on' }
+          on: { TOGGLE_UNDERLINE: { target: 'on' } }
         }
       }
     },
@@ -240,10 +464,10 @@ const wordMachine = createMachine({
       initial: 'off',
       states: {
         on: {
-          on: { TOGGLE_ITALICS: 'off' }
+          on: { TOGGLE_ITALICS: { target: 'off' } }
         },
         off: {
-          on: { TOGGLE_ITALICS: 'on' }
+          on: { TOGGLE_ITALICS: { target: 'on' } }
         }
       }
     },
@@ -251,53 +475,82 @@ const wordMachine = createMachine({
       initial: 'none',
       states: {
         none: {
-          on: { BULLETS: 'bullets', NUMBERS: 'numbers' }
+          on: {
+            BULLETS: { target: 'bullets' },
+            NUMBERS: { target: 'numbers' }
+          }
         },
         bullets: {
-          on: { NONE: 'none', NUMBERS: 'numbers' }
+          on: {
+            NONE: { target: 'none' },
+            NUMBERS: { target: 'numbers' }
+          }
         },
         numbers: {
-          on: { BULLETS: 'bullets', NONE: 'none' }
+          on: {
+            BULLETS: { target: 'bullets' },
+            NONE: { target: 'none' }
+          }
         }
       }
     }
   }
 });
 
-const boldState = wordMachine.transition('bold.off', {
-  type: 'TOGGLE_BOLD'
-}).value;
+const actor = createActor(wordMachine);
 
-// {
+actor.subscribe((state) => {
+  console.log(state.value);
+});
+
+actor.start();
+// logs {
+//   bold: 'off',
+//   italics: 'off',
+//   underline: 'off',
+//   list: 'none'
+// }
+
+actor.send({ type: 'TOGGLE_BOLD' });
+// logs {
 //   bold: 'on',
 //   italics: 'off',
 //   underline: 'off',
 //   list: 'none'
 // }
 
-const nextState = wordMachine.transition(
-  {
-    bold: 'off',
-    italics: 'off',
-    underline: 'on',
-    list: 'bullets'
-  },
-  { type: 'TOGGLE_ITALICS' }
-).value;
-
-// {
-//   bold: 'off',
+actor.send({ type: 'TOGGLE_ITALICS' });
+// logs {
+//   bold: 'on',
 //   italics: 'on',
-//   underline: 'on',
-//   list: 'bullets'
+//   underline: 'off',
+//   list: 'none'
 // }
 ```
 
+</td>
+<td>
+<a href="https://stately.ai/registry/editor/fa443471-b416-4014-8e6f-12417863e4d4?mode=design&machineId=980f50d8-e1ff-4441-8c8b-afe41c1610f2" title="Parallel states">
+  <img src="https://github.com/statelyai/xstate/assets/1093738/3b1989c0-f4a9-4653-baf2-4df3a40e91a6" alt="Parallel states" width="400" />
+  <br />
+  Open in Stately Studio
+</a>
+</td>
+</tr>
+</tbody>
+</table>
+
 ## History States
 
-<img src="https://imgur.com/I4QsQsz.png" width="300" alt="Machine with history state" />
+<table>
+<thead><tr><th>Code</th><th>Statechart</th></tr></thead>
+<tbody>
+<tr>
+<td>
 
 ```js
+import { createMachine, createActor } from 'xstate';
+
 const paymentMachine = createMachine({
   id: 'payment',
   initial: 'method',
@@ -305,44 +558,107 @@ const paymentMachine = createMachine({
     method: {
       initial: 'cash',
       states: {
-        cash: { on: { SWITCH_CHECK: 'check' } },
-        check: { on: { SWITCH_CASH: 'cash' } },
+        cash: {
+          on: {
+            SWITCH_CHECK: 'check'
+          }
+        },
+        check: {
+          on: {
+            SWITCH_CASH: 'cash'
+          }
+        },
         hist: { type: 'history' }
       },
-      on: { NEXT: 'review' }
+      on: { NEXT: { target: 'review' } }
     },
     review: {
-      on: { PREVIOUS: 'method.hist' }
+      on: { PREVIOUS: { target: 'method.hist' } }
     }
   }
 });
 
-const checkState = paymentMachine.transition('method.cash', {
-  type: 'SWITCH_CHECK'
+const actor = createActor(paymentMachine);
+
+actor.subscribe((state) => {
+  console.log(state.value);
 });
 
-// => State {
+actor.start();
+// logs {
+//   value: { method: 'cash' },
+// }
+
+actor.send({ type: 'SWITCH_CHECK' });
+// logs {
 //   value: { method: 'check' },
-//   history: State { ... }
 // }
 
-const reviewState = paymentMachine.transition(checkState, { type: 'NEXT' });
-
-// => State {
+actor.send({ type: 'NEXT' });
+// logs {
 //   value: 'review',
-//   history: State { ... }
 // }
 
-const previousState = paymentMachine.transition(reviewState, {
-  type: 'PREVIOUS'
-}).value;
-
-// => { method: 'check' }
+actor.send({ type: 'PREVIOUS' });
+// logs {
+//   value: { method: 'check' },
+// }
 ```
+
+</td>
+<td>
+<a href="https://stately.ai/registry/editor/fa443471-b416-4014-8e6f-12417863e4d4?mode=design&machineId=d1a9bb95-db97-4af3-b38b-71b005c643d3" title="History states">
+  <img src="https://github.com/statelyai/xstate/assets/1093738/1be5c495-d560-4660-94f2-5341efbf7128" alt="History state" width="400" />
+  <br />
+  Open in Stately Studio
+</a>
+</td>
+</tr>
+</tbody>
+</table>
 
 ## Sponsors
 
-Huge thanks to the following companies for sponsoring `xstate`. You can sponsor further `xstate` development [on OpenCollective](https://opencollective.com/xstate).
+Special thanks to the sponsors who support this open-source project:
 
-<a href="https://tipe.io" title="Tipe.io"><img src="https://cdn.tipe.io/tipe/tipe-logo.svg?w=240" style="background:#613DEF" /></a>
-<a href="https://webflow.com" title="Webflow"><img src="https://uploads-ssl.webflow.com/583347ca8f6c7ee058111b3b/5b03bde0971fdd75d75b5591_webflow.png" height="100" /></a>
+<img src="https://opencollective.com/xstate/tiers/backer/badge.svg?label=sponsors&color=brightgreen" />
+
+<a href="https://transloadit.com/?utm_source=xstate&utm_medium=referral&utm_campaign=sponsorship&utm_content=github">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://assets.transloadit.com/assets/images/sponsorships/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://assets.transloadit.com/assets/images/sponsorships/logo-default.svg">
+    <img src="https://assets.transloadit.com/assets/images/sponsorships/logo-default.svg" alt="Transloadit Logo">
+  </picture>
+</a>
+
+## SemVer Policy
+
+We understand the importance of the public contract and do not intend to release any breaking changes to the **runtime** API in a minor or patch release. We consider this with any changes we make to the XState libraries and aim to minimize their effects on existing users.
+
+### Breaking changes
+
+XState executes much of the user logic itself. Therefore, almost any change to its behavior might be considered a breaking change. We recognize this as a potential problem but believe that treating every change as a breaking change is not practical. We do our best to implement new features thoughtfully to enable our users to implement their logic in a better, safer way.
+
+Any change _could_ affect how existing XState machines behave if those machines are using particular configurations. We do not introduce behavior changes on a whim and aim to avoid making changes that affect most existing machines. But we reserve the right to make _some_ behavior changes in minor releases. Our best judgment of the situation will always dictate such changes. Please always read our release notes before deciding to upgrade.
+
+### TypeScript changes
+
+We also reserve a similar right to adjust declared TypeScript definitions or drop support for older versions of TypeScript in a minor release. The TypeScript language itself evolves quickly and often introduces breaking changes in its minor releases. Our team is also continuously learning how to leverage TypeScript more effectively - and the types improve as a result.
+
+For these reasons, it is impractical for our team to be bound by decisions taken when an older version of TypeScript was its latest version or when we didn’t know how to declare our types in a better way. We won’t introduce declaration changes often - but we are more likely to do so than with runtime changes.
+
+### Packages
+
+Most of the packages in the XState family declare a peer dependency on XState itself. We’ll be cautious about maintaining compatibility with already-released packages when releasing a new version of XState, **but** each release of packages depending on XState will always adjust the declared peer dependency range to include the latest version of XState. For example, you should always be able to update `xstate` without `@xstate/react`. But when you update `@xstate/react`, we highly recommend updating `xstate` too.
+
+<!-- public input validation contract from src/StateMachine.ts -->
+Validate external input with `machine.eventSchema` before `actor.send()`.
+It validates complete public events, excludes internal/runtime events, and allows
+explicitly configured routes. Payload checks require runtime schemas;
+`types<T>()` supplies types only. See [public input validation](../../docs/internal-events.md#validating-public-input).
+
+<!-- entry effects and terminal transition behavior from packages/core/src/stateUtils.ts and transitionActions.ts -->
+
+Functions passed to `enq(...)` run as effects; their returned context or child patches are ignored, with a development warning. Return a computed patch from the transition, entry, or exit function instead. Entry/exit functions using enqueue must declare exactly `(args, enq)`; default/rest parameter wrappers receive a development diagnostic. See [actions](../../docs/actions.md).
+
+Pure transitions preserve terminal snapshots and return no effects. `snapshot.can(...)` returns `false` for terminal snapshots; active dry runs propagate evaluation errors. See [snapshots](../../docs/snapshots.md) and [states](../../docs/states.md).
